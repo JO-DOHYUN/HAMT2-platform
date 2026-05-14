@@ -1,0 +1,93 @@
+# BRIEF.md - Board
+
+## Current Baseline
+- baseline source: `src/main.cpp`, `platformio.ini`
+- root routing source: `AGENTS.md`, `BRIEF.md`
+- encoder data sheet: `dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
+- final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
+- current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
+- current bench CAN: MCP2515 + TJA1050 SPI module, `MCP_8MHZ`, `CAN_500KBPS`, `CS/SCK/SI/SO/INT` level shifted; Portenta built-in CAN `PH13/PB8` is a separate physical CAN bus through an external transceiver
+- next hardware target: Portenta H7 M7 + Mid Carrier ASX00055. Production
+  `bus=0` is Mid Carrier J14 `CAN0_TX/RX` wired to ADA-5708 TJA1051T/3.
+  Production `bus=1` is Mid Carrier J4 terminal CAN1 through onboard U2.
+  MCP2515/TJA1050 is bench/legacy only for this target.
+- board target: Arduino Portenta H7 M7, `framework = arduino`
+- current firmware protocol: framed typed records v1
+  - SOF `0xA5 0x5A`, version, record type, flags, sequence, payload length, payload, CRC16-CCITT
+  - legacy fixed 20B serial telemetry is no longer the default firmware output
+- target contract: `shared/docs/TRANSPORT_AND_RECORDS_KO.md` typed records with board-local `mono64`
+- verified build status: PASS, 2026-04-22, `portenta_h7_m7_mcp_int_main`, `portenta_h7_m7_dual_can_basic`
+- verified capture path: PASS, 2026-04-22, MCP2515+TJA1050 5 V module at `CAN_500KBPS` received PCAN ID `0x202`, DLC 8, 10 ms period, `can_ok=1`, `can_drop=0`, `queue=0`, `fault=0x00000000`
+- verified INT status: PASS, 2026-04-22, `portenta_h7_m7_mcp_int_main` uses MCP2515 `INT_N` as an active-low level hint with bounded polling fallback. HIL log showed `flags=0x0A` (`can_ok=1`, MCP INT level mode enabled), PCAN 10 ms RX, `can_drop=0`.
+- verified dual baseline flash: PASS, 2026-04-22, `portenta_h7_m7_dual_can_basic` uploaded by DFU and streamed on `COM6`. MCP RX stayed healthy with PCAN on MCP (`can_rx` increasing, `can_drop=0`, `fault=0x00000000`). Built-in CAN controller initialized (`builtin_can_tx_ok=1`), but write attempts reported `EventBuiltinCanTxFailed` while PCAN was still connected only to MCP; this does not validate built-in CAN physical TX until a separate transceiver/bus node ACKs it.
+- verified CAN + voltage stream after voltage-lane edit: PASS, 2026-04-22, `portenta_h7_m7_dual_can_basic` uploaded by DFU. Stream contained `CAN_RX_RAW` on `bus=0` ID `0x530` with `can_drop=0`, `CAN_TX_RAW` on `bus=1` ID `0x321` with TX success counter increasing, and `ADC_SAMPLE` source `0` channels `0..3` at 12-bit raw counts. Health showed `flags=0x2E` (`can_ok=1`, `builtin_can_tx_ok=1`, `mcp_int_level=1`, `voltage_adc_ok=1`) and `fault=0x00000000`.
+- verified built-in CAN RX lane: PASS, 2026-04-23, `portenta_h7_m7_dual_can_basic` uploaded on `COM6`. Stream contained `CAN_RX_RAW bus=1` from the Portenta built-in CAN bus, `CAN_TX_RAW bus=1 id=0x321`, `CAN_RX_RAW bus=0 id=0x530`, `ADC_SAMPLE`, and `BOARD_HEALTH` with `can_drop=0`, `queue=0`, `fault=0x00000000`.
+- verified host control downlink: PASS, 2026-04-23, `HOST_CAN_TX_REQUEST` from USB was parsed and written to built-in CAN. Tests sent `0x503` and `0x510`; board returned `CONTROL_ACK status=1 reason=0` followed by `CAN_TX_RAW bus=1` for each, with `failed=0`.
+- known failed INT design: the previous edge-gated `BOARD_CAN_USE_INT=1` implementation caused red blinking. Do not restore that design. MCP2515 `INT_N` is level-signaled, so RX authority must come from MCP2515 status/register drain, not from a single falling-edge gate.
+
+## Current Architecture Goal
+- preserve the verified typed CAN/ADC/control legacy baseline while moving the
+  CSM code from a single-file sketch toward scoped modules
+- migrate the production target to Mid Carrier dual internal CAN semantics only
+  after pinout, CAPABILITY, health, and build-profile contracts are explicit
+- treat `shared/docs/TRANSPORT_AND_RECORDS_KO.md` as the canonical wire contract
+- treat `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as the latest integration
+  decision input, not as a replacement for scoped AGENTS/BRIEF docs
+- do not claim physical flash/HIL success without an actual hardware run
+- do not change record schema beyond the shared typed-record contract without
+  updating that shared contract in the same turn
+
+## Final Design Decision
+- keep the old 20B stream as a documented legacy compatibility format only
+- next production direction is a lane-separated evidence board:
+  - `TypedFrame` / `TypedRecords`
+  - `CanRxLane`
+  - `CanTxAuditLane`
+  - `EncoderEdgeLane`
+  - `AnalogSampleLane`
+  - `ControlLane`
+  - `SafetySupervisor`
+  - `UplinkScheduler`
+  - `HealthMonitor`
+- all lanes publish typed records on one monotonic board time axis
+- direct board sensor samples must not be encoded as fake CAN frames
+- host control must be auditable from intent to board decision to actual CAN TX to feedback/event; `CONTROL_ACK` is not final CAN success evidence
+- drive encoder input is fixed as industrial HTL front-end plus Portenta `PC6`/`PC7` TIM3 encoder mode and `PA8` index input; direct 24 V HTL to GPIO is forbidden
+- carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
+- legacy bench CAN uses MCP2515 over SPI on `D7..D11`; bench firmware uses
+  `INT_N` as a level hint. `portenta_h7_m7_dual_can_basic` keeps that MCP RX
+  path enabled, receives and audits the Portenta built-in CAN controller
+  (`PH13/PB8`) as `bus=1`, accepts Qt host CAN TX requests for `0x503` and
+  `0x510..0x513`, sends a 500 ms example frame on that built-in CAN controller,
+  and owns the first voltage raw lane on `A0/A1/A6/A7`.
+- Mid Carrier production direction is capability-driven: `bus=0` is CAN0 plus
+  ADA-5708/TJA1051 for monitor/system CAN, and `bus=1` is J4 terminal CAN1 for
+  drive/control CAN. Current ArduinoCore exposes only one Portenta CAN object in
+  this repo, so CAN0 needs an internal CAN0 backend before it can be claimed as a
+  working live lane.
+
+## Working Features To Preserve
+- current CAN raw capture remains truthful
+- current serial upload remains recoverable/resyncable through SOF + length + CRC16
+- current basic stats visibility remains available
+- existing `dropped_total` and packet sequence visibility remain present until replaced by typed `BOARD_HEALTH` / `BOARD_EVENT`
+
+## Acceptance
+- `mono64` migration is explicitly specified before replacing the current `uint32_t micros()` field
+- raw CAN record migration is documented in `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
+- drop/overflow visibility is preserved or improved
+- control and capture paths cannot hide side effects from each other
+- compile succeeds for the current firmware baseline after document finalization
+- `portenta_h7_m7_mid_dual_can20` compiles without MCP2515 production
+  dependency before larger internal CAN code changes begin
+
+## Risks
+- open items:
+  - Arduino_CAN does not currently expose hardware FIFO overflow or bus-state counters in this implementation
+  - component-level schematic symbols, PCB layout, and exact production BOM are not generated in this repository yet
+  - QT parser/storage work must be synchronized with framed typed records v1
+- manual checks:
+  - CAN flood and hidden-drop check
+  - encoder pulse injection check after `EncoderEdgeLane` exists
+  - ADC burst starvation check after `AnalogSampleLane` exists
+  - lease timeout, reconnect, and estop transition check after `ControlLane` exists
