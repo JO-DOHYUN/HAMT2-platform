@@ -1,20 +1,38 @@
 # HIL_RUNBOOK_KO
 
-## 최소 검증 세트
-1. CAN flood 중 hidden drop 없는지
-2. DBS60E equivalent encoder pulse injection 시 miss/overflow/index fault가 가시화 되는지
-3. ADC burst 동시 사용 시 CAN path 보호되는지
-4. reconnect / lease timeout / estop 전이 일관성 있는지
-5. power-loss 후 session 복구 가능한지
-6. 2h 이상 soak 에서 drift/overflow 양상 보이는지
+## Minimum Verification
+- CAN flood must not create hidden drops. Drops must appear in counters/events.
+- Encoder pulse injection must expose miss, overflow, index, and fault evidence.
+- ADC bursts must not starve CAN evidence.
+- Reconnect, lease timeout, estop, and field power loss must be visible.
+- Long soak must show no unreported drift, overflow, or queue growth.
 
-## 통과 기준
-- 손실이 없어야 이상적이지만,
-- 손실이 생기면 반드시 lane/time/counter/event로 드러나야 한다.
-
-## 구동 엔코더 추가 기준
-- A/B는 `PC6`/`PC7`의 TIM3 encoder mode로 검증한다.
-- Z index는 `PA8` EXTI timestamp와 TIM3 extended count snapshot이 함께 남아야 한다.
-- 2048 PPR, 6000 rpm 상당인 204.8 kHz/channel, 819.2 kedge/s x4 조건을 통과 기준으로 둔다.
-- 300 kHz/channel 근접 입력에서는 정상 범위 초과 event를 남기고, 카운터 포화나 조용한 wrap을 허용하지 않는다.
-- field power loss, receiver fault, cable open/short 추정 상태는 `BOARD_HEALTH` 또는 `BOARD_EVENT`로 드러나야 한다.
+## CSM Safety-Gated HIL Addendum, 2026-05-18
+- Build env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`.
+- Automated gate: `py -3 pc_tools/hil_csm_dual_safety_gate.py --port COM7 --baud 115200`.
+- Hardware:
+  - bus0 MCP2515/TJA1050, 8 MHz crystal, 500 kbps, Classic CAN 2.0.
+  - bus1 Mid Carrier J4/U2, 500 kbps, Classic CAN 2.0.
+- Boot pass evidence:
+  - `CAPABILITY` length 112, profile major 3.
+  - bus0 descriptor backend MCP2515, bus1 descriptor backend ArduinoCAN.
+  - bus descriptor role is `0` or non-authoritative hint only.
+  - `BOARD_HEALTH` length 128, health version 2, heartbeat/session counters visible.
+- Reject gate:
+  - Send `HOST_CAN_TX_REQUEST` before heartbeat and arm.
+  - Expected: `CONTROL_ACK status=0 reason=9` or `10`.
+  - Expected: no matching `CAN_TX_RAW`.
+- Arm gate:
+  - Send `HOST_HEARTBEAT`.
+  - Send `HOST_CONTROL_SESSION action=1 lease_ms=500 requested_bus=0xFF`.
+  - Expected: `CONTROL_ACK status=1 reason=0`.
+  - Expected: safety state becomes armed or control active.
+- TX audit:
+  - Send allowlisted standard ID `0x503` on bus0 and bus1.
+  - Expected per bus: `CONTROL_ACK status=1 reason=0`, then matching `CAN_TX_RAW`.
+  - External analyzer must see the same frame on the selected physical channel.
+- Timeout:
+  - Stop heartbeat for more than 300 ms.
+  - Expected: new host TX is rejected.
+  - Expected: `BOARD_HEALTH v2` heartbeat age increases.
+  - Expected: no hidden CAN write occurs.

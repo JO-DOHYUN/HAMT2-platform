@@ -20,7 +20,7 @@ class HostDownlinkParser {
   void drop(uint16_t count);
   void process();
 
-  static constexpr uint16_t kBufferSize = 160;
+  static constexpr uint16_t kBufferSize = 192;
 
   FrameHandler frame_handler_ = nullptr;
   CrcFailureHandler crc_failure_handler_ = nullptr;

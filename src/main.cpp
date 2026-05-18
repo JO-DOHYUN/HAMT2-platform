@@ -4,7 +4,9 @@
 #include "BoardPins.h"
 #include "board/CapabilityPublisher.h"
 #include "board/HostDownlinkParser.h"
+#include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
+#include "protocol/HostCommands.h"
 #include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
 
@@ -206,6 +208,8 @@ using csm::kProtocolVersion;
 using csm::kCapabilityV1PayloadLen;
 using csm::kCapabilityV2BusDescriptorLen;
 using csm::kCapabilityV2PayloadLen;
+using csm::kCapabilityV3PayloadLen;
+using csm::kBoardHealthV2PayloadLen;
 using csm::mono64_us;
 using csm::rd_u16_le;
 using csm::rd_u32_le;
@@ -216,13 +220,7 @@ using csm::wr_u16_le;
 using csm::wr_u32_le;
 using csm::wr_u64_le;
 
-enum class SafetyState : uint8_t {
-  MonitorOnly = 0,
-  ControlStandby = 1,
-  ControlArmed = 2,
-  Fault = 3,
-  Estop = 4,
-};
+using SafetyState = csm::board::SafetyState;
 
 enum BoardEventCode : uint16_t {
   EventBoot = 1,
@@ -242,6 +240,11 @@ enum BoardEventCode : uint16_t {
   EventHostCanTxAccepted = 15,
   EventCan0BackendUnavailable = 16,
   EventMcp2515TxFailed = 17,
+  EventSafetyStateChanged = 18,
+  EventHostHeartbeat = 19,
+  EventHostControlSession = 20,
+  EventHostCommandUnsupported = 21,
+  EventFaultLockoutCleared = 22,
 };
 
 struct CanRxItem {
@@ -285,6 +288,8 @@ static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
 static volatile uint32_t serial_record_tx_total = 0;
 static uint32_t host_frame_crc_failed_total = 0;
+static uint32_t host_heartbeat_total = 0;
+static uint32_t host_control_session_total = 0;
 static uint32_t host_can_tx_request_total = 0;
 static uint32_t __attribute__((unused)) host_can_tx_accepted_total = 0;
 static uint32_t host_can_tx_rejected_total = 0;
@@ -372,6 +377,7 @@ static uint32_t encoder_fault_events = 0;
 static bool encoder_fault_prev = false;
 static bool field_power_prev = true;
 static bool estop_prev = false;
+static csm::board::SafetySupervisor safety_supervisor;
 static SafetyState safety_state = SafetyState::MonitorOnly;
 
 static uint32_t last_health_ms = 0;
@@ -415,10 +421,17 @@ using csm::ControlReasonBadLength;
 using csm::ControlReasonBadProtocol;
 using csm::ControlReasonCanNotReady;
 using csm::ControlReasonCanWriteFailed;
+using csm::ControlReasonControlLeaseExpired;
 using csm::ControlReasonDlcOutOfRange;
+using csm::ControlReasonEstopAsserted;
+using csm::ControlReasonFieldPowerLost;
 using csm::ControlReasonIdNotAllowed;
+using csm::ControlReasonHostTimeout;
+using csm::ControlReasonNotArmed;
 using csm::ControlReasonOk;
+using csm::ControlReasonSafetyLockout;
 using csm::ControlReasonUnsupportedFrame;
+using csm::ControlReasonUnsupportedCommand;
 
 static void emit_control_ack(uint32_t command_id, uint8_t status, uint8_t reason, uint8_t bus,
                              uint32_t can_id_flags, uint8_t dlc, uint32_t counter) {
@@ -512,12 +525,30 @@ static void emit_capability() {
 
 #if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_TJA1051_DUAL
   config.include_v2 = true;
+  config.include_v3 = true;
 #if BOARD_HW_PROFILE_MID_MCP2515
   config.bus_count = BOARD_ENABLE_BUILTIN_CAN_LANE ? 2 : 1;
 #else
   config.bus_count = 2;
 #endif
   config.capability_v2_flags = 0x0003;
+  config.supported_uplink_records =
+      (1u << static_cast<uint8_t>(RecordType::CanRxRaw)) |
+      (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
+      (1u << static_cast<uint8_t>(RecordType::AdcSample)) |
+      (1u << static_cast<uint8_t>(RecordType::ControlAck)) |
+      (1u << static_cast<uint8_t>(RecordType::BoardEvent)) |
+      (1u << static_cast<uint8_t>(RecordType::BoardHealth)) |
+      (1u << static_cast<uint8_t>(RecordType::Capability));
+  config.supported_downlink_records =
+      (1u << static_cast<uint8_t>(RecordType::HostCanTxRequest)) |
+      (1u << static_cast<uint8_t>(RecordType::HostHeartbeat)) |
+      (1u << static_cast<uint8_t>(RecordType::HostControlSession)) |
+      (1u << static_cast<uint8_t>(RecordType::HostQueryCapability)) |
+      (1u << static_cast<uint8_t>(RecordType::HostClearFaultLockout));
+  config.safety_feature_flags = 0x0000000Fu;
+  config.host_tx_queue_size = 32;
+  config.capability_v3_flags = 0x0001;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   config.capability_v2_flags |= (1u << 2);
 #endif
@@ -525,7 +556,7 @@ static void emit_capability() {
 #if BOARD_HW_PROFILE_MID_MCP2515
   config.buses[0] = make_capability_bus_descriptor(
       BOARD_MCP2515_BUS_ID,
-      BOARD_MCP2515_BUS_ROLE,
+      0,
       1,
       1,
       BOARD_ENABLE_MCP2515 ? 1 : 0,
@@ -536,7 +567,7 @@ static void emit_capability() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
-      BOARD_BUILTIN_CAN_BUS_ROLE,
+      0,
       2,
       3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
@@ -548,7 +579,7 @@ static void emit_capability() {
 #else
   config.buses[0] = make_capability_bus_descriptor(
       0,
-      1,
+      0,
 #if BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
       3,
       2,
@@ -566,7 +597,7 @@ static void emit_capability() {
 
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
-      BOARD_BUILTIN_CAN_BUS_ROLE,
+      0,
       2,
       3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
@@ -577,7 +608,7 @@ static void emit_capability() {
 #endif
 #endif
 
-  uint8_t payload[kCapabilityV2PayloadLen];
+  uint8_t payload[kCapabilityV3PayloadLen];
   const uint16_t payload_len = csm::board::build_capability_payload(config, payload, sizeof(payload));
   if (payload_len > 0) {
     emit_record(RecordType::Capability, payload, payload_len);
@@ -785,7 +816,8 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
-  uint8_t payload[52];
+  uint8_t payload[kBoardHealthV2PayloadLen];
+  memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
   wr_u32_le(&payload[8], can_rx_count_total);
   wr_u32_le(&payload[12], can_rx_dropped_total);
@@ -812,6 +844,42 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[47] |= voltage_adc_ok ? (1u << 5) : 0;
 #endif
   wr_u32_le(&payload[48], snap.fault_flags);
+  payload[52] = 2;  // BOARD_HEALTH payload version.
+  payload[53] = static_cast<uint8_t>(sizeof(payload));
+  payload[54] = static_cast<uint8_t>(safety_supervisor.state());
+  payload[55] = safety_supervisor.faultBits();
+  wr_u32_le(&payload[56], safety_supervisor.heartbeatAgeMs(millis()));
+  wr_u32_le(&payload[60], safety_supervisor.leaseRemainingMs(millis()));
+  wr_u32_le(&payload[64], host_frame_crc_failed_total);
+  wr_u32_le(&payload[68], host_can_tx_request_total);
+  wr_u32_le(&payload[72], host_can_tx_accepted_total);
+  wr_u32_le(&payload[76], host_can_tx_rejected_total);
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  wr_u32_le(&payload[80], mcp2515_tx_total);
+  wr_u32_le(&payload[84], mcp2515_tx_failed_total);
+#endif
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  wr_u32_le(&payload[88], builtin_can_tx_total);
+  wr_u32_le(&payload[92], builtin_can_tx_failed_total);
+#endif
+#if BOARD_ENABLE_MCP2515
+  wr_u32_le(&payload[96], mcp_service.spi_error_total);
+  wr_u32_le(&payload[100], mcp_service.error_flag_total);
+  payload[104] = mcp_service.last_canintf;
+  payload[105] = mcp_service.last_eflg;
+  payload[106] = mcp_service.last_canctrl;
+  payload[107] = mcp_service.last_int_low ? 1 : 0;
+#endif
+  wr_u32_le(&payload[108], queued);
+  wr_u32_le(&payload[112], safety_supervisor.transitionCounter());
+  uint32_t backend_flags = 0;
+  backend_flags |= can_backend_ok ? (1u << 0) : 0;
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  backend_flags |= builtin_can_tx_ok ? (1u << 1) : 0;
+#endif
+  wr_u32_le(&payload[116], backend_flags);
+  wr_u32_le(&payload[120], host_heartbeat_total);
+  wr_u32_le(&payload[124], host_control_session_total);
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
 }
 
@@ -897,39 +965,75 @@ static bool should_enable_can_tx_gate_for_test() {
 #endif
 }
 
+static bool control_backend_ready_for_bus(uint8_t bus) {
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
+  if (bus == BOARD_MCP2515_BUS_ID) {
+    return can_backend_ok && mcp2515 != nullptr;
+  }
+#endif
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  if (bus == BOARD_BUILTIN_CAN_BUS_ID) {
+    return builtin_can_tx_ok;
+  }
+#endif
+  return false;
+}
+
+static bool any_control_backend_ready() {
+  bool ready = false;
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
+  ready = ready || (can_backend_ok && mcp2515 != nullptr);
+#endif
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  ready = ready || builtin_can_tx_ok;
+#endif
+  return ready;
+}
+
+static csm::board::SafetyInputs read_safety_inputs() {
+  csm::board::SafetyInputs inputs;
+#if BOARD_ENABLE_SAFETY_IO
+  inputs.estop_asserted = !digitalRead(BoardPins::EstopInN);
+  inputs.field_power_ok = digitalRead(BoardPins::FieldPowerOk);
+  inputs.encoder_fault = !digitalRead(BoardPins::EncoderFaultN);
+  inputs.arm_key = digitalRead(BoardPins::ArmKeyIn);
+#endif
+  inputs.control_backend_ready = any_control_backend_ready();
+  return inputs;
+}
+
 static void update_safety_state() {
 #if BOARD_ENABLE_SAFETY_IO
-  const bool estop = !digitalRead(BoardPins::EstopInN);
-  const bool field_ok = digitalRead(BoardPins::FieldPowerOk);
-  const bool encoder_fault = !digitalRead(BoardPins::EncoderFaultN);
+  const csm::board::SafetyInputs inputs = read_safety_inputs();
+  const SafetyState before = safety_supervisor.state();
+  safety_supervisor.update(millis(), inputs);
+  safety_state = safety_supervisor.state();
+  digitalWrite(BoardPins::CanTxEnable,
+               (safety_supervisor.canDriveTxGate() || should_enable_can_tx_gate_for_test()) ? HIGH : LOW);
 
-  if (estop) {
-    safety_state = SafetyState::Estop;
-    digitalWrite(BoardPins::CanTxEnable, LOW);
-  } else if (!field_ok || encoder_fault) {
-    safety_state = SafetyState::Fault;
-    digitalWrite(BoardPins::CanTxEnable, LOW);
-  } else {
-    safety_state = SafetyState::MonitorOnly;
-    digitalWrite(BoardPins::CanTxEnable, should_enable_can_tx_gate_for_test() ? HIGH : LOW);
-  }
-
-  if (estop && !estop_prev) {
+  if (inputs.estop_asserted && !estop_prev) {
     emit_board_event(EventEstopAsserted, 0, 1);
   }
-  if (!field_ok && field_power_prev) {
+  if (!inputs.field_power_ok && field_power_prev) {
     emit_board_event(EventFieldPowerLost, 0, 1);
   }
-  if (encoder_fault && !encoder_fault_prev) {
+  if (inputs.encoder_fault && !encoder_fault_prev) {
     encoder_fault_events++;
     emit_board_event(EventEncoderFaultAsserted, 0, encoder_fault_events);
   }
+  if (before != safety_state) {
+    emit_board_event(EventSafetyStateChanged,
+                     (static_cast<uint16_t>(before) << 8) | static_cast<uint8_t>(safety_state),
+                     safety_supervisor.transitionCounter());
+  }
 
-  estop_prev = estop;
-  field_power_prev = field_ok;
-  encoder_fault_prev = encoder_fault;
+  estop_prev = inputs.estop_asserted;
+  field_power_prev = inputs.field_power_ok;
+  encoder_fault_prev = inputs.encoder_fault;
 #else
-  safety_state = SafetyState::MonitorOnly;
+  const csm::board::SafetyInputs inputs = read_safety_inputs();
+  safety_supervisor.update(millis(), inputs);
+  safety_state = safety_supervisor.state();
 #endif
 }
 
@@ -1485,6 +1589,15 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   uint8_t data[8] = {0};
   memcpy(data, &payload[11], dlc);
 
+  uint8_t safety_reason = ControlReasonOk;
+  if (!safety_supervisor.canAcceptTx(millis(), control_backend_ready_for_bus(bus), &safety_reason)) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected, safety_reason, bus, can_id_flags, dlc,
+                     host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, safety_reason, host_can_tx_rejected_total);
+    return;
+  }
+
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
   if (target_mcp2515) {
     if (!can_backend_ok || mcp2515 == nullptr) {
@@ -1505,10 +1618,10 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
       return;
     }
 
-    mcp2515_tx_total++;
     host_can_tx_accepted_total++;
     emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
                      host_can_tx_accepted_total);
+    safety_supervisor.noteControlTx(millis());
     return;
   }
 #endif
@@ -1546,6 +1659,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   host_can_tx_accepted_total++;
   emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
                    host_can_tx_accepted_total);
+  safety_supervisor.noteControlTx(millis());
   emit_can_tx_raw(bus, can_id_flags, dlc, data, builtin_can_tx_total, builtin_can_tx_failed_total);
 #else
   host_can_tx_rejected_total++;
@@ -1559,6 +1673,129 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
 #endif
 }
 
+static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t len) {
+  uint32_t command_id = seq;
+  if (len >= 4) {
+    command_id = rd_u32_le(&payload[0]);
+  }
+  if (len != csm::kHostHeartbeatPayloadLen) {
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0,
+                     host_heartbeat_total);
+    return;
+  }
+
+  host_heartbeat_total++;
+  safety_supervisor.heartbeat(millis());
+  if ((host_heartbeat_total & 0x3Fu) == 1) {
+    emit_board_event(EventHostHeartbeat, 0, host_heartbeat_total);
+  }
+}
+
+static void handle_host_control_session(uint16_t seq, const uint8_t* payload, uint16_t len) {
+  uint32_t command_id = seq;
+  uint8_t action = 0xFF;
+  uint8_t requested_bus = 0xFF;
+  uint16_t lease_ms = 0;
+
+  host_control_session_total++;
+
+  if (len >= 4) {
+    command_id = rd_u32_le(&payload[0]);
+  }
+  if (len != csm::kHostControlSessionPayloadLen) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, requested_bus, 0, 0,
+                     host_control_session_total);
+    emit_board_event(EventHostControlSession, ControlReasonBadLength, host_control_session_total);
+    return;
+  }
+
+  action = payload[4];
+  requested_bus = payload[5];
+  lease_ms = rd_u16_le(&payload[8]);
+
+  const csm::board::SafetyInputs inputs = read_safety_inputs();
+  safety_supervisor.update(millis(), inputs);
+  safety_state = safety_supervisor.state();
+
+  uint8_t reason = ControlReasonOk;
+  uint8_t status = ControlAckAccepted;
+  const bool backend_ready =
+      requested_bus == 0xFF ? any_control_backend_ready() : control_backend_ready_for_bus(requested_bus);
+
+  switch (action) {
+    case csm::HostControlDisarm:
+      safety_supervisor.disarm(millis());
+      break;
+    case csm::HostControlArm:
+      reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
+      break;
+    case csm::HostControlRenewLease:
+      reason = safety_supervisor.renewLease(millis(), lease_ms);
+      break;
+    case csm::HostControlInstallNeutralProfile:
+      reason = ControlReasonUnsupportedCommand;
+      break;
+    default:
+      reason = ControlReasonUnsupportedCommand;
+      break;
+  }
+
+  if (reason != ControlReasonOk) {
+    status = ControlAckRejected;
+    host_can_tx_rejected_total++;
+  }
+
+  safety_state = safety_supervisor.state();
+  emit_control_ack(command_id, status, reason, requested_bus, 0, 0, host_control_session_total);
+  emit_board_event(EventHostControlSession,
+                   (static_cast<uint16_t>(action) << 8) | reason,
+                   host_control_session_total);
+}
+
+static void handle_host_query_capability(uint16_t seq, const uint8_t* payload, uint16_t len) {
+  uint32_t command_id = seq;
+  if (len >= 4) {
+    command_id = rd_u32_le(&payload[0]);
+  }
+  if (len != 0 && len != 4) {
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0, 0);
+    return;
+  }
+  emit_capability();
+  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0, 0, 0);
+}
+
+static void handle_host_clear_fault_lockout(uint16_t seq, const uint8_t* payload, uint16_t len) {
+  uint32_t command_id = seq;
+  if (len >= 4) {
+    command_id = rd_u32_le(&payload[0]);
+  }
+  if (len != csm::kHostClearFaultLockoutPayloadLen) {
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0, 0);
+    return;
+  }
+
+  const csm::board::SafetyInputs inputs = read_safety_inputs();
+  uint8_t reason = ControlReasonOk;
+  if (inputs.estop_asserted) {
+    reason = ControlReasonEstopAsserted;
+  } else if (!inputs.field_power_ok) {
+    reason = ControlReasonFieldPowerLost;
+  } else if (inputs.encoder_fault) {
+    reason = csm::ControlReasonEncoderFault;
+  }
+
+  if (reason == ControlReasonOk) {
+    safety_supervisor.clearFaultLockout(millis());
+    safety_state = safety_supervisor.state();
+    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0, 0, 0);
+    emit_board_event(EventFaultLockoutCleared, 0, safety_supervisor.transitionCounter());
+  } else {
+    emit_control_ack(command_id, ControlAckRejected, reason, 0xFF, 0, 0, 0);
+  }
+}
+
 static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t seq,
                                 const uint8_t* payload, uint16_t len) {
   if (version != kProtocolVersion) {
@@ -1568,6 +1805,18 @@ static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t s
 
   if (record_type == static_cast<uint8_t>(RecordType::HostCanTxRequest)) {
     handle_host_can_tx_request(payload, len);
+  } else if (record_type == static_cast<uint8_t>(RecordType::HostHeartbeat)) {
+    handle_host_heartbeat(seq, payload, len);
+  } else if (record_type == static_cast<uint8_t>(RecordType::HostControlSession)) {
+    handle_host_control_session(seq, payload, len);
+  } else if (record_type == static_cast<uint8_t>(RecordType::HostQueryCapability)) {
+    handle_host_query_capability(seq, payload, len);
+  } else if (record_type == static_cast<uint8_t>(RecordType::HostClearFaultLockout)) {
+    handle_host_clear_fault_lockout(seq, payload, len);
+  } else {
+    emit_control_ack(seq, ControlAckRejected, ControlReasonUnsupportedCommand, 0xFF, 0, 0,
+                     host_can_tx_request_total);
+    emit_board_event(EventHostCommandUnsupported, record_type, host_can_tx_request_total);
   }
 }
 
@@ -1732,6 +1981,8 @@ void setup() {
   while (!Serial && (millis() - start_ms) < 1500) {}
 
   init_safety_pins();
+  safety_supervisor.begin(millis());
+  safety_state = safety_supervisor.state();
   voltage_adc_ok = init_voltage_adc_lane();
 
 #if BOARD_ENABLE_ENCODER_IO
@@ -1754,7 +2005,6 @@ void setup() {
     can_backend_ok = init_can_backend();
     if (!can_backend_ok) {
       emit_board_event(EventCanBeginFailed, 0, 1);
-      safety_state = SafetyState::Fault;
     }
   }
 

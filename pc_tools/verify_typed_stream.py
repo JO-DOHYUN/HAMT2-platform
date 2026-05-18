@@ -16,9 +16,16 @@ TYPE_NAMES = {
     7: "BOARD_EVENT",
     8: "BOARD_HEALTH",
     9: "CAPABILITY",
+    10: "HOST_CAN_TX_REQUEST",
+    11: "HOST_HEARTBEAT",
+    12: "HOST_CONTROL_SESSION",
+    13: "HOST_SET_CONTROL_POLICY",
+    14: "HOST_QUERY_CAPABILITY",
+    15: "HOST_CLEAR_FAULT_LOCKOUT",
 }
 
 BUS_ROLE_NAMES = {
+    0: "role_hint_unknown",
     1: "monitor/system",
     2: "drive/control",
     3: "debug/legacy",
@@ -226,6 +233,18 @@ def describe(frame):
         )
 
     if rtype == 8 and len(payload) >= 52:
+        extra = ""
+        if len(payload) >= 128 and payload[52] == 2:
+            extra = (
+                f" health_v={payload[52]} safety_v2={payload[54]} fault_bits=0x{payload[55]:02X}"
+                f" heartbeat_age_ms={u32(payload, 56)} lease_ms={u32(payload, 60)}"
+                f" host_crc={u32(payload, 64)} host_req={u32(payload, 68)}"
+                f" host_acc={u32(payload, 72)} host_rej={u32(payload, 76)}"
+                f" mcp_tx={u32(payload, 80)} mcp_fail={u32(payload, 84)}"
+                f" builtin_tx={u32(payload, 88)} builtin_fail={u32(payload, 92)}"
+                f" mcp_spi_err={u32(payload, 96)} mcp_err_flags={u32(payload, 100)}"
+                f" heartbeat_total={u32(payload, 120)} session_total={u32(payload, 124)}"
+            )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
             f"can_drop={u32(payload, 12)} fifo_overflow={u32(payload, 16)} "
@@ -237,7 +256,7 @@ def describe(frame):
             f"can_ok={(payload[47] >> 1) & 1} builtin_can_tx_ok={(payload[47] >> 2) & 1} "
             f"mcp_int_level={(payload[47] >> 3) & 1} mcp_exti_hint={(payload[47] >> 4) & 1} "
             f"voltage_adc_ok={(payload[47] >> 5) & 1} "
-            f"fault=0x{u32(payload, 48):08X}"
+            f"fault=0x{u32(payload, 48):08X}{extra}"
         )
 
     if rtype == 9 and len(payload) >= 36:
@@ -259,7 +278,15 @@ def describe(frame):
                     if len(payload) >= offset + 20:
                         descs.append(capability_bus_desc(payload, offset))
             if descs:
-                return f"{base} cap_v2_flags=0x{flags:04X} " + " | ".join(descs)
+                tail = f"{base} cap_v2_flags=0x{flags:04X} " + " | ".join(descs)
+                if len(payload) >= 112:
+                    tail += (
+                        f" uplink_mask=0x{u32(payload, 80):08X}"
+                        f" downlink_mask=0x{u32(payload, 84):08X}"
+                        f" safety_features=0x{u32(payload, 88):08X}"
+                        f" host_tx_q={u16(payload, 100)}"
+                    )
+                return tail
         return base
 
     return f"[{name}] seq={seq} len={len(payload)} payload={payload.hex(' ')}"

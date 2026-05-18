@@ -19,6 +19,22 @@ enum ControlAckReason : uint8_t {
   ControlReasonCanNotReady = 6,
   ControlReasonCanWriteFailed = 7,
   ControlReasonBadProtocol = 8,
+  ControlReasonNotArmed = 9,
+  ControlReasonHostTimeout = 10,
+  ControlReasonControlLeaseExpired = 11,
+  ControlReasonSafetyLockout = 12,
+  ControlReasonEstopAsserted = 13,
+  ControlReasonFieldPowerLost = 14,
+  ControlReasonEncoderFault = 15,
+  ControlReasonQueueFull = 16,
+  ControlReasonTxBusy = 17,
+  ControlReasonBusOff = 18,
+  ControlReasonErrorPassive = 19,
+  ControlReasonRoleUnresolved = 20,
+  ControlReasonPolicyHashMismatch = 21,
+  ControlReasonNeutralProfileMissing = 22,
+  ControlReasonRateLimited = 23,
+  ControlReasonUnsupportedCommand = 24,
 };
 
 static constexpr uint8_t kNoFixedControlBus = 0xFF;
@@ -30,9 +46,12 @@ static constexpr uint16_t kCanRawPayloadLen = 30;
 static constexpr uint16_t kControlAckPayloadLen = 28;
 static constexpr uint16_t kBoardEventPayloadLen = 16;
 static constexpr uint16_t kBoardHealthPayloadLen = 52;
+static constexpr uint16_t kBoardHealthV1PayloadLen = 52;
+static constexpr uint16_t kBoardHealthV2PayloadLen = 128;
 static constexpr uint16_t kCapabilityPayloadLen = 36;
 static constexpr uint16_t kCapabilityV1PayloadLen = 36;
 static constexpr uint16_t kCapabilityV2PayloadLen = 80;
+static constexpr uint16_t kCapabilityV3PayloadLen = 112;
 static constexpr uint8_t kCapabilityV2BusDescriptorLen = 20;
 static constexpr uint16_t kAdcSamplePayloadLen = 44;
 

@@ -6,7 +6,7 @@ namespace csm::board {
 
 struct CapabilityBusDescriptor {
   uint8_t bus_id = 0;
-  uint8_t role = 0;
+  uint8_t role = 0;  // role_hint only; VSM must not treat this as authoritative.
   uint8_t backend = 0;
   uint8_t transceiver = 0;
   uint8_t rx_supported = 0;
@@ -34,8 +34,16 @@ struct CapabilityPayloadConfig {
   uint8_t lane_capability_flags = 0;
   uint8_t limitation_flags = 0;
   bool include_v2 = false;
+  bool include_v3 = false;
   uint8_t bus_count = 0;
   uint16_t capability_v2_flags = 0;
+  uint32_t supported_uplink_records = 0;
+  uint32_t supported_downlink_records = 0;
+  uint32_t safety_feature_flags = 0;
+  uint32_t policy_hash = 0;
+  uint32_t firmware_build_id = 0;
+  uint16_t host_tx_queue_size = 0;
+  uint16_t capability_v3_flags = 0;
   CapabilityBusDescriptor buses[2] = {};
 };
 

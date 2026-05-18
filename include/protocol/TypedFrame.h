@@ -9,7 +9,7 @@ namespace csm {
 static constexpr uint8_t kFrameSof0 = 0xA5;
 static constexpr uint8_t kFrameSof1 = 0x5A;
 static constexpr uint8_t kProtocolVersion = 1;
-static constexpr uint16_t kMaxPayloadLen = 96;
+static constexpr uint16_t kMaxPayloadLen = 160;
 
 enum class RecordType : uint8_t {
   CanRxRaw = 1,
@@ -22,6 +22,11 @@ enum class RecordType : uint8_t {
   BoardHealth = 8,
   Capability = 9,
   HostCanTxRequest = 10,
+  HostHeartbeat = 11,
+  HostControlSession = 12,
+  HostSetControlPolicy = 13,
+  HostQueryCapability = 14,
+  HostClearFaultLockout = 15,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);
@@ -40,4 +45,3 @@ bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
                        uint16_t len, uint16_t& seq, uint8_t flags = 0);
 
 }  // namespace csm
-

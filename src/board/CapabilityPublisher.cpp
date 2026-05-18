@@ -71,7 +71,19 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
                          config.buses[i]);
   }
 
-  return kCapabilityV2PayloadLen;
+  if (!config.include_v3 || capacity < kCapabilityV3PayloadLen) {
+    return kCapabilityV2PayloadLen;
+  }
+
+  wr_u32_le(&payload[80], config.supported_uplink_records);
+  wr_u32_le(&payload[84], config.supported_downlink_records);
+  wr_u32_le(&payload[88], config.safety_feature_flags);
+  wr_u32_le(&payload[92], config.policy_hash);
+  wr_u32_le(&payload[96], config.firmware_build_id);
+  wr_u16_le(&payload[100], config.host_tx_queue_size);
+  wr_u16_le(&payload[102], config.capability_v3_flags);
+
+  return kCapabilityV3PayloadLen;
 }
 
 }  // namespace csm::board

@@ -3,7 +3,7 @@ import time
 
 import serial
 
-from send_host_can_tx_request import build_frame, parse_data
+from send_host_can_tx_request import build_control_session_frame, build_frame, build_heartbeat_frame, parse_data
 from verify_typed_stream import describe, parse_frame, u32
 
 
@@ -14,6 +14,15 @@ def is_matching_audit(frame: dict, can_id: int, bus: int) -> bool:
     if len(payload) < 30:
         return False
     return (u32(payload, 8) & 0x1FFFFFFF) == can_id and payload[13] == bus
+
+
+def is_matching_ack(frame: dict, command_id: int) -> bool:
+    if frame.get("type") != 6:
+        return False
+    payload = frame.get("payload", b"")
+    if len(payload) < 28:
+        return False
+    return u32(payload, 8) == command_id
 
 
 def main() -> None:
@@ -28,6 +37,8 @@ def main() -> None:
     args = parser.parse_args()
 
     frame = build_frame(args.command_id, args.bus, args.id, parse_data(args.data))
+    heartbeat_frame = build_heartbeat_frame(args.command_id - 2)
+    arm_frame = build_control_session_frame(args.command_id - 1, bus=0xFF, lease_ms=500)
     buf = bytearray()
     sent = False
     saw_ack = False
@@ -38,6 +49,9 @@ def main() -> None:
 
     with serial.Serial(args.port, args.baud, timeout=0.05) as ser:
         ser.reset_input_buffer()
+        ser.write(heartbeat_frame)
+        ser.write(arm_frame)
+        ser.flush()
         while time.time() < deadline:
             now = time.time()
             if not saw_ack and now >= next_send:
@@ -60,8 +74,10 @@ def main() -> None:
                 if parsed is None:
                     break
                 parsed_this_tick += 1
-                if parsed.get("type") == 6:
+                if is_matching_ack(parsed, args.command_id):
                     saw_ack = True
+                    print(describe(parsed))
+                elif parsed.get("type") == 6:
                     print(describe(parsed))
                 elif is_matching_audit(parsed, args.id, args.bus):
                     saw_audit = True

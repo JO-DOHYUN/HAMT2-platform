@@ -42,6 +42,10 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect
+- production host TX must pass heartbeat, arm, lease, safety inputs, backend
+  readiness, and allowlist policy before it reaches a CAN backend
+- bus descriptor role is only a hint; System/Drive semantics belong to VMS
+  binding, not the board firmware
 
 ## Architecture Direction
 - board is not a simple bridge anymore
@@ -59,6 +63,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   logic should move into scoped modules without changing the typed wire contract.
 - MCP2515 remains the current working external controller path; J4/U2 uses the
   single Arduino CAN object as the second HIL-proven physical channel.
+- `CONTROL_ACK` means rejected or accepted by the board control path. Actual CAN
+  write success remains `CAN_TX_RAW`.
 
 ## Delivery Rules
 - prefer patch-sized changes unless architecture reset is explicitly needed

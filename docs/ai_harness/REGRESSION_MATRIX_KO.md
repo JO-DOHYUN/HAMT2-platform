@@ -25,10 +25,21 @@
 - default final env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
 - `CAPABILITY` profile major 3 exposes `bus=0` MCP2515/TJA1050 and `bus=1`
   Mid Carrier J4/U2 descriptors
+- bus descriptor role is a non-authoritative `role_hint`; VMS must not hard-code
+  System/Drive from bus id or descriptor role
 - `BOARD_HEALTH` shows `can_drop=0`, `fifo_overflow=0`, `queue=0`, `fault=0`
   during final smoke
+- production host TX before heartbeat+arm is rejected with `CONTROL_ACK reason=9`
+  or `10`
+- `HOST_HEARTBEAT` then `HOST_CONTROL_SESSION action=arm` is required before
+  allowlisted host TX
 - `bus=0 id=0x503` host request -> `CONTROL_ACK` then `CAN_TX_RAW bus=0`
 - `bus=1 id=0x503` host request -> `CONTROL_ACK` then `CAN_TX_RAW bus=1`
+- `CONTROL_ACK status=1` is never treated as final CAN success; matching
+  `CAN_TX_RAW` remains required
+- heartbeat timeout blocks new host TX and appears in `BOARD_HEALTH v2`
+- automated HIL gate `pc_tools/hil_csm_dual_safety_gate.py` must pass before
+  calling the CSM control gateway complete
 - Kvaser sees the `bus=1` audited frame and reports zero error frames
 - production runtime env has periodic test TX disabled; smoke TX belongs only
   to `portenta_h7_m7_mid_mcp2515_j4_dual_smoke`

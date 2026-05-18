@@ -45,6 +45,11 @@
   `CONTROL_ACK status=1`, `CAN_TX_RAW bus=1 failed=0`, and Kvaser received the
   same payload. Host `bus=0 id=0x503` produced `CONTROL_ACK status=1` and
   `CAN_TX_RAW bus=0 failed=0`.
+- current rebuild direction, 2026-05-18: keep the verified dual CSM hardware
+  baseline, add heartbeat/arm/lease safety gating, expose extended
+  `CAPABILITY`/`BOARD_HEALTH`, and remove authoritative System/Drive bus role
+  from firmware. VMS must bind semantic roles from capability plus model pack or
+  operator configuration.
 - known failed INT design: the previous edge-gated `BOARD_CAN_USE_INT=1` implementation caused red blinking. Do not restore that design. MCP2515 `INT_N` is level-signaled, so RX authority must come from MCP2515 status/register drain, not from a single falling-edge gate.
 
 ## Current Architecture Goal
@@ -78,14 +83,14 @@
 - carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
 - current Mid Carrier CSM CAN uses MCP2515 over SPI on `D7..D11`; firmware uses
   `INT_N` as a level hint, receives `CAN_RX_RAW bus=0`, accepts host CAN TX
-  requests for the allowlisted IDs on `bus=0`, and audits successful writes as
-  `CAN_TX_RAW bus=0`.
+  requests for the allowlisted IDs only after heartbeat+arm+lease safety gates,
+  and audits successful writes as `CAN_TX_RAW bus=0`.
 - optional final dual-channel Mid Carrier CSM env additionally exposes the J4
   CAN1 terminal as `bus=1` through the onboard U2 transceiver. It receives
-  `CAN_RX_RAW bus=1` and accepts allowlisted host TX requests on `bus=1`.
-- the same active MCP2515 lane can be advertised as drive/control or
-  monitor/system with build-profile role flags; Qt/VMS must follow
-  `CAPABILITY` bus descriptors instead of hard-coded labels.
+  `CAN_RX_RAW bus=1` and accepts allowlisted host TX requests on `bus=1` through
+  the same safety gate.
+- firmware bus descriptors expose physical backend and capability; role is only
+  a non-authoritative hint.
 - the previous dual internal CAN direction remains a deferred research path, not
   the active CSM hardware contract.
 

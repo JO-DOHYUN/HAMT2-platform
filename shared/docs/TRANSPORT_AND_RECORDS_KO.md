@@ -25,6 +25,14 @@ Record types:
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
 - `10 HOST_CAN_TX_REQUEST` host-to-board downlink only
+- `11 HOST_HEARTBEAT` host-to-board downlink only
+- `12 HOST_CONTROL_SESSION` host-to-board downlink only
+- `13 HOST_SET_CONTROL_POLICY` host-to-board downlink only, reserved
+- `14 HOST_QUERY_CAPABILITY` host-to-board downlink only
+- `15 HOST_CLEAR_FAULT_LOCKOUT` host-to-board downlink only
+
+Maximum payload length is `160` bytes for the current CSM rebuild. Hosts must
+parse by `payload_len` and skip unknown trailing bytes.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
 - `0..7 mono_us u64`
@@ -87,6 +95,22 @@ Current `CONTROL_ACK` reasons:
 - `6` built-in CAN not ready
 - `7` CAN write failed
 - `8` bad protocol version
+- `9` safety not armed
+- `10` host heartbeat timeout
+- `11` control lease expired
+- `12` safety lockout
+- `13` estop asserted
+- `14` field power lost
+- `15` encoder fault
+- `16` queue full
+- `17` TX busy
+- `18` bus off
+- `19` error passive
+- `20` role unresolved
+- `21` policy hash mismatch
+- `22` neutral profile missing
+- `23` rate limited
+- `24` unsupported command
 
 `HOST_CAN_TX_REQUEST` payload, 19 bytes, host-to-board:
 - `0..3 command_id u32`
@@ -106,6 +130,27 @@ Current board host TX policy:
 - Extended and RTR frames are rejected in this baseline.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
+
+Safety-gated control session:
+- `HOST_HEARTBEAT` payload, 12 bytes:
+  - `0..3 command_id u32`
+  - `4..7 host_mono_ms u32`
+  - `8..9 flags u16`
+  - `10..11 reserved u16`
+- `HOST_CONTROL_SESSION` payload, 24 bytes:
+  - `0..3 command_id u32`
+  - `4 action u8`: `0` disarm, `1` arm, `2` renew lease, `3` install neutral profile reserved
+  - `5 requested_bus u8`: physical bus id or `0xFF` for any configured control backend
+  - `6..7 flags u16`
+  - `8..9 lease_ms u16`: `0` means board default 500 ms, max 2000 ms
+  - `10..11 reserved u16`
+  - `12..15 policy_hash u32`
+  - `16..19 model_pack_hash u32`
+  - `20..23 aux u32`
+- `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
+- `HOST_CLEAR_FAULT_LOCKOUT` payload is `command_id u32`.
+- Production host TX requires heartbeat alive, arm accepted, lease valid, safe
+  inputs, and a ready target backend. Heartbeat resume alone never auto-arms.
 
 Reserved next-phase `CONTROL_ACK` status names, without changing the current v1
 payload:
@@ -140,6 +185,11 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `15` host CAN TX accepted
 - `16` Mid Carrier target CAN0 backend unavailable or pending
 - `17` MCP2515 TX failed
+- `18` safety state changed
+- `19` host heartbeat observed
+- `20` host control session decision
+- `21` unsupported host command
+- `22` fault lockout cleared
 
 `ADC_SAMPLE` payload, 44 bytes:
 - `0..7 mono_us u64`
@@ -175,6 +225,9 @@ Qt storage rule:
   unavailable built-in CAN FIFO/bus-off counters.
 - When payload extensions are needed, keep record type `9` and version/profile
   fields explicit so older hosts can reject or degrade cleanly.
+- Bus descriptor byte `1` is now `role_hint` only. The value is not
+  authoritative and may be `0`. VSM must bind System/Drive semantics from its
+  model pack, fingerprint, or operator override, not from the physical bus id.
 
 Current 36-byte `CAPABILITY` payload interpretation:
 - `0..7 mono_us u64`
@@ -243,6 +296,38 @@ implemented:
   current Portenta `PH13/PB8` path through Mid Carrier J4.
 - Hosts must tolerate longer `CAPABILITY` payloads by parsing the common prefix
   and skipping unknown trailing fields.
+
+Extended 112-byte `CAPABILITY` payload:
+- `0..79`: same as the 80-byte payload.
+- `80..83 supported_uplink_records u32`: bit index equals record type value.
+- `84..87 supported_downlink_records u32`: bit index equals record type value.
+- `88..91 safety_feature_flags u32`
+- `92..95 policy_hash u32`
+- `96..99 firmware_build_id u32`
+- `100..101 host_tx_queue_size u16`
+- `102..103 capability_v3_flags u16`
+- `104..111 reserved`
+
+Extended 128-byte `BOARD_HEALTH` payload:
+- `0..51`: same prefix as the original 52-byte health payload.
+- `52 health_payload_version u8`: currently `2`
+- `53 health_payload_len u8`: currently `128`
+- `54 safety_state u8`
+- `55 safety_fault_bits u8`
+- `56..59 heartbeat_age_ms u32`
+- `60..63 lease_remaining_ms u32`
+- `64..67 host_crc_fail_total u32`
+- `68..71 host_can_tx_request_total u32`
+- `72..75 host_can_tx_accepted_total u32`
+- `76..79 host_can_tx_rejected_total u32`
+- `80..87 MCP TX success/fail counters`
+- `88..95 J4 built-in CAN TX success/fail counters`
+- `96..107 MCP SPI/error/register snapshot`
+- `108..111 CAN RX queue depth u32`
+- `112..115 safety_transition_counter u32`
+- `116..119 backend_flags u32`
+- `120..123 host_heartbeat_total u32`
+- `124..127 host_control_session_total u32`
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - `bus_count` is build-profile driven. Single-lane MCP profiles use
