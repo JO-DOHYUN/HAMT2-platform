@@ -1,6 +1,14 @@
 # BUILD_VERIFY_POLICY_KO
 
 ## CSM Build
+Default final CSM verification:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run
+```
+
+This defaults to `portenta_h7_m7_mid_mcp2515_j4_dual_csm`.
+
 기본 검증:
 
 ```powershell

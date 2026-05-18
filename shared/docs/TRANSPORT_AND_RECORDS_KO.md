@@ -41,12 +41,20 @@ Current board baseline:
 - Portenta built-in CAN receive frames emit `CAN_RX_RAW bus=1`.
 - Successful Portenta built-in CAN writes emit `CAN_TX_RAW bus=1`.
 
-Mid Carrier target baseline:
-- `bus=0`: Mid Carrier J14 `CAN0_TX/RX` wired to ADA-5708 TJA1051T/3,
-  monitor/system CAN role.
-- `bus=1`: Mid Carrier J4 terminal CAN1 through onboard U2, drive/control CAN
-  role.
-- MCP2515 is not a production backend in this profile.
+Current Mid Carrier MCP2515 CSM profile:
+- Profile major `3`.
+- `bus=0`: external MCP2515/TJA1050 on Mid Carrier `D7..D11` SPI pins,
+  Classic CAN 2.0, `MCP_8MHZ`, `CAN_500KBPS`, 2 MHz SPI in the current CSM
+  build profile.
+- `bus=0` emits `CAN_RX_RAW` for received frames and `CAN_TX_RAW` for successful
+  host-commanded or bench-test writes.
+- final dual-channel runtime env `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+  additionally exposes `bus=1`: Mid Carrier J4 CAN1 through onboard U2,
+  Classic CAN 2.0, 500 kbps. `bus=1` emits `CAN_RX_RAW` and accepts audited
+  allowlisted host-commanded writes.
+- The previous dual internal CAN0/CAN1 + TJA1051 target is deferred in this
+  repository until a second internal CAN controller backend is implemented and
+  HIL-proven.
 
 `CONTROL_ACK` payload, 28 bytes:
 - `0..7 mono_us u64`
@@ -62,11 +70,12 @@ Mid Carrier target baseline:
 `CONTROL_ACK` is request-decision evidence, not final CAN success evidence. Host
 software must not mark a frame as actually sent from `CONTROL_ACK` alone. Actual
 CAN TX success is proven by the matching `CAN_TX_RAW` audit record. The current
-firmware emits `CONTROL_ACK status=1 reason=0` only after the immediate built-in
-CAN write path accepts the request, then emits `CAN_TX_RAW` after the successful
-write. Future queued control lanes may keep the same payload size while refining
-status wording, but must preserve the rule that `CAN_TX_RAW` is the actual-send
-evidence.
+MCP2515 profile emits `CONTROL_ACK status=1 reason=0` after the request is
+accepted into the MCP TX path, then emits `CAN_TX_RAW` only after the TX
+completion audit succeeds. The built-in CAN profile emits `CAN_TX_RAW` after the
+Arduino CAN API accepts the write. Future queued control lanes may keep the same
+payload size while refining status wording, but must preserve the rule that
+`CAN_TX_RAW` is the actual-send evidence.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -81,17 +90,22 @@ Current `CONTROL_ACK` reasons:
 
 `HOST_CAN_TX_REQUEST` payload, 19 bytes, host-to-board:
 - `0..3 command_id u32`
-- `4 bus u8`: current control bus must be `1`
+- `4 bus u8`: logical bus id from `CAPABILITY`; do not assume a fixed system
+  or drive channel number
 - `5 frame_flags u8`: bit0 extended, bit1 RTR
 - `6..9 can_id u32`: raw CAN ID without flag bits
 - `10 dlc u8`: `0..8`
 - `11..18 data[8]`
 
 Current board host TX policy:
-- Accepted bus: `1` Portenta built-in CAN only.
+- Accepted bus is profile-dependent. Profile major `1` accepts `bus=1` Portenta
+  built-in CAN. Profile major `3` accepts the buses whose `CAPABILITY`
+  descriptor has `control_tx_allowed=1`; the final dual CSM env accepts `bus=0`
+  MCP2515/TJA1050 and `bus=1` Mid Carrier J4/U2.
 - Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
 - Extended and RTR frames are rejected in this baseline.
-- On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0` and then `CAN_TX_RAW bus=1`.
+- On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
+  and then `CAN_TX_RAW` on the same bus.
 
 Reserved next-phase `CONTROL_ACK` status names, without changing the current v1
 payload:
@@ -125,6 +139,7 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `14` host CAN TX rejected
 - `15` host CAN TX accepted
 - `16` Mid Carrier target CAN0 backend unavailable or pending
+- `17` MCP2515 TX failed
 
 `ADC_SAMPLE` payload, 44 bytes:
 - `0..7 mono_us u64`
@@ -182,12 +197,13 @@ Current 36-byte `CAPABILITY` payload interpretation:
 - `33 ADC sample period ms low byte u8`
 - `34 lane capability flags`: bit0 MCP bus0 RX compiled, bit1 built-in bus1 RX
   compiled, bit2 built-in bus1 TX compiled, bit3 host TX policy active on bus1,
-  bit4 MCP INT_N level hint compiled, bit5 lab ADC evidence lane compiled
+  bit4 MCP INT_N level hint compiled, bit5 lab ADC evidence lane compiled, bit6
+  MCP bus0 TX compiled, bit7 host TX policy active on bus0
 - `35 limitation/policy flags`: bit0 built-in CAN detailed bus-state counters are
   not exposed by the current API, bit1 host TX allowlist active, bit2 bench
   example TX active
 
-Extended 80-byte `CAPABILITY` payload for board profile major `2`:
+Extended 80-byte `CAPABILITY` payload for board profile major `2` or `3`:
 - `0..35`: same prefix as the current 36-byte payload.
 - `36 bus_count u8`: current Mid Carrier profile uses `2`.
 - `37 descriptor_size u8`: currently `20`.
@@ -227,6 +243,33 @@ implemented:
   current Portenta `PH13/PB8` path through Mid Carrier J4.
 - Hosts must tolerate longer `CAPABILITY` payloads by parsing the common prefix
   and skipping unknown trailing fields.
+
+Mid Carrier MCP2515 profile major `3` descriptor default:
+- `bus_count` is build-profile driven. Single-lane MCP profiles use
+  `bus_count=1`. The final dual CSM profile uses `bus_count=2`.
+- descriptor 0 describes `bus=0` MCP2515/TJA1050.
+- descriptor 1, when present, describes `bus=1` Mid Carrier J4/U2 through the
+  Arduino CAN single-object backend.
+- role is build-profile driven. The default `portenta_h7_m7_mid_mcp2515_csm`
+  uses role `2` drive/control, while
+  `portenta_h7_m7_mid_mcp2515_csm_system` uses role `1` monitor/system on the
+  same physical MCP2515 channel. Qt/VMS must bind labels and control affordances
+  from this descriptor, not from the bus number.
+- physical backend `1` MCP2515, transceiver `1` TJA1050.
+- `rx_supported=1`, `tx_supported=1`, `control_tx_allowed=1` when
+  `portenta_h7_m7_mid_mcp2515_csm` is built.
+- Classic CAN supported, CAN FD unsupported, max live DLC `8`, nominal bitrate
+  `500000`, data bitrate `0`.
+
+Final CSM protocol freeze for VMS:
+- VMS must use transport `version=1` and the record IDs/payload sizes in this
+  document without alternate live 20-byte modes.
+- VMS must parse `CAPABILITY` first and bind bus labels, backend, role, bitrate,
+  and control permission from descriptors.
+- VMS may send `HOST_CAN_TX_REQUEST` only for allowlisted standard IDs
+  `0x503` and `0x510..0x513`, DLC `0..8`, no RTR, no extended frame.
+- VMS must treat `CONTROL_ACK` as board decision evidence only. Actual sent
+  evidence is the matching `CAN_TX_RAW` on the requested bus.
 
 ## 권장 방향
 - 링크 계층: framed transport

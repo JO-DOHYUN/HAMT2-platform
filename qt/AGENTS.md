@@ -28,9 +28,10 @@ Do not bulk-load the shared or QT docs directories. Load detailed docs only when
 - graph optimization must not change raw truth
 - board sensor direct / controller CAN / command TX must remain distinguishable
 - raw `capture.stream` is the source of truth; decoded CAN, voltage scaling, graph data, and operator notes are sidecars
-- CAN bus labels must come from `CAPABILITY`; legacy MCP profiles expose MCP
-  `bus=0` and Portenta built-in `bus=1`, while Mid Carrier profiles expose
-  CAN0/TJA1051 `bus=0` and terminal CAN1 `bus=1`
+- CAN bus labels must come from `CAPABILITY`; profile major `3` may expose
+  Mid Carrier MCP2515/TJA1050 `bus=0` and Mid Carrier J4/U2 `bus=1`, while the
+  deferred profile major `2` describes the unproven dual internal CAN/TJA1051
+  target.
 - voltage `ADC_SAMPLE` must remain separate from CAN evidence
 - logging must be crash-safe and operator-clear
 

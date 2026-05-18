@@ -2,11 +2,18 @@
 #include <cstring>
 
 #include "BoardPins.h"
+#include "board/CapabilityPublisher.h"
+#include "board/HostDownlinkParser.h"
+#include "board/StatusLed.h"
 #include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
 
 #ifndef BOARD_HW_PROFILE_MID_TJA1051_DUAL
 #define BOARD_HW_PROFILE_MID_TJA1051_DUAL 0
+#endif
+
+#ifndef BOARD_HW_PROFILE_MID_MCP2515
+#define BOARD_HW_PROFILE_MID_MCP2515 0
 #endif
 
 #ifndef BOARD_TARGET_INTERNAL_CAN_LANE0
@@ -56,8 +63,40 @@
 #define BOARD_CAN_POLL_FALLBACK_US 2000
 #endif
 
+#ifndef BOARD_CAN_SERIAL_DRAIN_BUDGET
+#define BOARD_CAN_SERIAL_DRAIN_BUDGET 32
+#endif
+
 #ifndef BOARD_CAN_ERROR_EVENT_PERIOD_MS
 #define BOARD_CAN_ERROR_EVENT_PERIOD_MS 500
+#endif
+
+#ifndef BOARD_CAPABILITY_PERIOD_MS
+#define BOARD_CAPABILITY_PERIOD_MS 2000
+#endif
+
+#ifndef BOARD_ENABLE_STATUS_LED
+#define BOARD_ENABLE_STATUS_LED 1
+#endif
+
+#ifndef BOARD_ENABLE_MCP2515_TX_TEST
+#define BOARD_ENABLE_MCP2515_TX_TEST 0
+#endif
+
+#ifndef BOARD_MCP2515_TX_PERIOD_MS
+#define BOARD_MCP2515_TX_PERIOD_MS 500
+#endif
+
+#ifndef BOARD_MCP2515_TX_TEST_ID
+#define BOARD_MCP2515_TX_TEST_ID 0x321
+#endif
+
+#ifndef BOARD_MCP2515_TX_AUDIT_TIMEOUT_MS
+#define BOARD_MCP2515_TX_AUDIT_TIMEOUT_MS 100
+#endif
+
+#ifndef BOARD_MCP2515_TX_USE_ONESHOT
+#define BOARD_MCP2515_TX_USE_ONESHOT (BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_MCP2515_TX_TEST)
 #endif
 
 #ifndef BOARD_ENABLE_BUILTIN_CAN_TX_TEST
@@ -72,10 +111,47 @@
 #define BOARD_ENABLE_HOST_CAN_TX BOARD_ENABLE_BUILTIN_CAN_TX_TEST
 #endif
 
-#define BOARD_ENABLE_BUILTIN_CAN_LANE (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || BOARD_ENABLE_HOST_CAN_TX)
+#ifndef BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#define BOARD_ENABLE_HOST_CAN_TX_BUILTIN BOARD_ENABLE_HOST_CAN_TX
+#endif
+
+#ifndef BOARD_ENABLE_HOST_CAN_TX_MCP2515
+#define BOARD_ENABLE_HOST_CAN_TX_MCP2515 0
+#endif
+
+#define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+#define BOARD_ENABLE_BUILTIN_CAN_LANE (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN)
 
 #ifndef BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
 #define BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND 0
+#endif
+
+#ifndef BOARD_BUILTIN_CAN_RX_BUS
+#define BOARD_BUILTIN_CAN_RX_BUS 1
+#endif
+
+#ifndef BOARD_MCP2515_BUS_ID
+#define BOARD_MCP2515_BUS_ID 0
+#endif
+
+#ifndef BOARD_MCP2515_BUS_ROLE
+#define BOARD_MCP2515_BUS_ROLE 2
+#endif
+
+#ifndef BOARD_BUILTIN_CAN_BUS_ID
+#define BOARD_BUILTIN_CAN_BUS_ID BOARD_BUILTIN_CAN_RX_BUS
+#endif
+
+#ifndef BOARD_BUILTIN_CAN_BUS_ROLE
+#define BOARD_BUILTIN_CAN_BUS_ROLE 1
+#endif
+
+#ifndef BOARD_MCP2515_CONTROL_TX_ALLOWED
+#define BOARD_MCP2515_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_MCP2515
+#endif
+
+#ifndef BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
 #endif
 
 #ifndef BOARD_ENABLE_VOLTAGE_ADC
@@ -88,6 +164,10 @@
 
 #ifndef BOARD_BUILTIN_CAN_TX_PERIOD_MS
 #define BOARD_BUILTIN_CAN_TX_PERIOD_MS 500
+#endif
+
+#ifndef BOARD_BUILTIN_CAN_TX_TEST_ID
+#define BOARD_BUILTIN_CAN_TX_TEST_ID 0x322
 #endif
 
 #ifndef BOARD_ENABLE_CAN_TX_GATE_FOR_TEST
@@ -109,12 +189,18 @@ static constexpr bool kTestMode = false;
 #if BOARD_ENABLE_MCP2515
 static constexpr CAN_SPEED kMcp2515Bitrate = CAN_500KBPS;
 static constexpr CAN_CLOCK kMcp2515Clock = MCP_8MHZ;
-static constexpr uint32_t kMcp2515SpiHz = 250000;
+#ifndef BOARD_MCP2515_SPI_HZ
+#define BOARD_MCP2515_SPI_HZ 250000
+#endif
+static constexpr uint32_t kMcp2515SpiHz = BOARD_MCP2515_SPI_HZ;
 #endif
 
 using csm::crc16_ccitt;
 using csm::kFrameSof0;
 using csm::kFrameSof1;
+using csm::kHostCanTxAllowedPrimaryId;
+using csm::kHostCanTxAllowedRangeEnd;
+using csm::kHostCanTxAllowedRangeStart;
 using csm::kMaxPayloadLen;
 using csm::kProtocolVersion;
 using csm::kCapabilityV1PayloadLen;
@@ -155,6 +241,7 @@ enum BoardEventCode : uint16_t {
   EventHostCanTxRejected = 14,
   EventHostCanTxAccepted = 15,
   EventCan0BackendUnavailable = 16,
+  EventMcp2515TxFailed = 17,
 };
 
 struct CanRxItem {
@@ -176,8 +263,6 @@ struct EncoderSnapshot {
 
 static constexpr uint32_t kCanQueueSize = 1024;
 static constexpr uint32_t kCanQueueMask = kCanQueueSize - 1;
-static constexpr uint16_t kHostRxBufferSize = 160;
-using csm::kControlBus;
 
 static constexpr uint8_t kVoltageAdcBits = 12;
 static constexpr uint8_t kVoltageChannelCount = 4;
@@ -199,8 +284,6 @@ static volatile uint32_t can_rx_count_total = 0;
 static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
 static volatile uint32_t serial_record_tx_total = 0;
-static uint8_t host_rx_buf[kHostRxBufferSize];
-static uint16_t host_rx_len = 0;
 static uint32_t host_frame_crc_failed_total = 0;
 static uint32_t host_can_tx_request_total = 0;
 static uint32_t __attribute__((unused)) host_can_tx_accepted_total = 0;
@@ -249,13 +332,35 @@ static Mcp2515ServiceState mcp_service = {};
 static bool builtin_can_tx_ok = false;
 #endif
 
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
 static uint32_t builtin_can_tx_total = 0;
 static uint32_t builtin_can_tx_failed_total = 0;
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
 static uint32_t last_builtin_can_tx_ms = 0;
+#endif
+
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+static uint32_t mcp2515_tx_total = 0;
+static uint32_t mcp2515_tx_failed_total = 0;
+struct Mcp2515PendingTx {
+  bool active;
+  uint32_t start_ms;
+  uint8_t bus;
+  uint32_t can_id_flags;
+  uint8_t dlc;
+  uint8_t data[8];
+};
+static Mcp2515PendingTx mcp2515_pending_tx = {};
+#endif
+
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
+static uint32_t last_mcp2515_tx_ms = 0;
+#endif
+
+#if BOARD_ENABLE_STATUS_LED
+static csm::board::StatusLed status_led;
 #endif
 
 static TIM_HandleTypeDef htim3;
@@ -270,6 +375,7 @@ static bool estop_prev = false;
 static SafetyState safety_state = SafetyState::MonitorOnly;
 
 static uint32_t last_health_ms = 0;
+static uint32_t last_capability_ms = 0;
 static uint32_t last_encoder_derived_ms = 0;
 static uint32_t last_watchdog_toggle_ms = 0;
 static uint32_t last_can_init_retry_ms = 0;
@@ -279,6 +385,19 @@ static void emit_record(RecordType type, const uint8_t* payload, uint16_t len, u
     serial_record_tx_total++;
   }
 }
+
+#if BOARD_ENABLE_STATUS_LED
+static void init_status_led() {
+  status_led.begin();
+}
+
+static void service_status_led() {
+  status_led.service(can_backend_ok);
+}
+#else
+static void init_status_led() {}
+static void service_status_led() {}
+#endif
 
 static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
   uint8_t payload[16];
@@ -317,126 +436,161 @@ static void emit_control_ack(uint32_t command_id, uint8_t status, uint8_t reason
   emit_record(RecordType::ControlAck, payload, sizeof(payload));
 }
 
-static void emit_capability() {
-  uint8_t payload[kCapabilityV2PayloadLen];
-  memset(payload, 0, sizeof(payload));
-  wr_u64_le(&payload[0], mono64_us());
-  payload[8] = kProtocolVersion;
-#if BOARD_HW_PROFILE_MID_TJA1051_DUAL
-  payload[9] = 2;   // board profile major: Mid Carrier + TJA1051 target
-#else
-  payload[9] = 1;   // board profile major
+#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_TJA1051_DUAL
+static csm::board::CapabilityBusDescriptor make_capability_bus_descriptor(
+    uint8_t bus_id, uint8_t role, uint8_t backend, uint8_t transceiver,
+    uint8_t rx_supported, uint8_t tx_supported, uint8_t control_tx_allowed,
+    uint8_t termination_policy, uint8_t isolation_policy) {
+  csm::board::CapabilityBusDescriptor bus;
+  bus.bus_id = bus_id;
+  bus.role = role;
+  bus.backend = backend;
+  bus.transceiver = transceiver;
+  bus.rx_supported = rx_supported;
+  bus.tx_supported = tx_supported;
+  bus.control_tx_allowed = control_tx_allowed;
+  bus.termination_policy = termination_policy;
+  bus.isolation_policy = isolation_policy;
+  return bus;
+}
 #endif
-  payload[10] = 0;  // board profile minor
-  payload[11] = 1;  // mono64 unit: microsecond
-  wr_u32_le(&payload[12], kCanQueueSize);
-  wr_u32_le(&payload[16], 2048);   // DBS60E PPR
-  wr_u32_le(&payload[20], 300000); // encoder channel frequency limit from datasheet
-  payload[24] = 0x01;              // CAN_RX_RAW supported
-  payload[25] = 0x01;              // CAN_TX_RAW supported
-  payload[26] = 0x01;              // ENC_EDGE_RAW supported
-  payload[27] = 0x01;              // ENC_DERIVED supported
-  payload[28] = BOARD_ENABLE_VOLTAGE_ADC ? 0x01 : 0x00; // ADC_SAMPLE supported
-  payload[29] = 0x01;              // BOARD_HEALTH supported
-  payload[30] = 0x01;              // BOARD_EVENT supported
-  payload[31] = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageChannelCount : 0;
-  payload[32] = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageAdcBits : 0;
-  payload[33] = static_cast<uint8_t>(BOARD_VOLTAGE_SAMPLE_PERIOD_MS & 0xFF);
-  payload[34] = 0;                  // lane capability flags
+
+static void emit_capability() {
+  csm::board::CapabilityPayloadConfig config;
+#if BOARD_HW_PROFILE_MID_MCP2515
+  config.profile_major = 3;   // Mid Carrier + external MCP2515 current CSM
+#elif BOARD_HW_PROFILE_MID_TJA1051_DUAL
+  config.profile_major = 2;   // Mid Carrier + TJA1051 target
+#else
+  config.profile_major = 1;
+#endif
+  config.profile_minor = 0;
+  config.can_queue_size = kCanQueueSize;
+  config.encoder_ppr = 2048;
+  config.encoder_frequency_limit_hz = 300000;
+  config.adc_sample_supported = BOARD_ENABLE_VOLTAGE_ADC;
+  config.adc_channel_count = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageChannelCount : 0;
+  config.adc_resolution_bits = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageAdcBits : 0;
+  config.adc_sample_period_ms = static_cast<uint8_t>(BOARD_VOLTAGE_SAMPLE_PERIOD_MS & 0xFF);
+
+  uint8_t lane_flags = 0;
 #if BOARD_ENABLE_MCP2515
-  payload[34] |= (1u << 0);         // MCP2515 bus=0 RX lane compiled
-  payload[34] |= (BOARD_CAN_IRQ_MODE != 0) ? (1u << 4) : 0; // INT_N level hint
+  lane_flags |= (1u << 0);
+  lane_flags |= (BOARD_CAN_IRQ_MODE != 0) ? (1u << 4) : 0;
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_RX
-  payload[34] |= (1u << 1);         // built-in CAN bus=1 RX lane compiled
+  lane_flags |= (1u << 1);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX
-  payload[34] |= (1u << 2);         // built-in CAN bus=1 TX lane compiled
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  lane_flags |= (1u << 2);
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX
-  payload[34] |= (1u << 3);         // host TX accepted on built-in CAN policy
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  lane_flags |= (1u << 3);
+#endif
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  lane_flags |= (1u << 6);
+#endif
+#if BOARD_ENABLE_HOST_CAN_TX_MCP2515
+  lane_flags |= (1u << 7);
 #endif
 #if BOARD_ENABLE_VOLTAGE_ADC
-  payload[34] |= (1u << 5);         // lab ADC evidence lane compiled
+  lane_flags |= (1u << 5);
 #endif
-  payload[35] = 0;                  // limitation/policy flags
+  config.lane_capability_flags = lane_flags;
+
+  uint8_t limitation_flags = 0;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-  payload[35] |= (1u << 0);         // built-in CAN detailed bus-state counters not exposed
+  limitation_flags |= (1u << 0);
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX
-  payload[35] |= (1u << 1);         // host TX allowlist is active
+#if BOARD_ENABLE_HOST_CAN_TX_ANY
+  limitation_flags |= (1u << 1);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-  payload[35] |= (1u << 2);         // bench example 0x321 transmitter is active
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_MCP2515_TX_TEST
+  limitation_flags |= (1u << 2);
 #endif
+  config.limitation_flags = limitation_flags;
 
-  uint16_t payload_len = kCapabilityV1PayloadLen;
-
-#if BOARD_HW_PROFILE_MID_TJA1051_DUAL
-  payload_len = kCapabilityV2PayloadLen;
-  payload[36] = 2;                                // bus_count
-  payload[37] = kCapabilityV2BusDescriptorLen;    // descriptor_size
-  uint16_t cap_v2_flags = 0x0003;                 // descriptors present + production target
+#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_TJA1051_DUAL
+  config.include_v2 = true;
+#if BOARD_HW_PROFILE_MID_MCP2515
+  config.bus_count = BOARD_ENABLE_BUILTIN_CAN_LANE ? 2 : 1;
+#else
+  config.bus_count = 2;
+#endif
+  config.capability_v2_flags = 0x0003;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
-  cap_v2_flags |= (1u << 2);                      // lane0 backend pending
+  config.capability_v2_flags |= (1u << 2);
 #endif
-  wr_u16_le(&payload[38], cap_v2_flags);
 
-  auto write_bus_descriptor = [&](uint8_t offset, uint8_t bus_id, uint8_t role,
-                                  uint8_t backend, uint8_t transceiver,
-                                  uint8_t rx_supported, uint8_t tx_supported,
-                                  uint8_t control_tx_allowed,
-                                  uint8_t termination_policy,
-                                  uint8_t isolation_policy) {
-    payload[offset + 0] = bus_id;
-    payload[offset + 1] = role;
-    payload[offset + 2] = backend;
-    payload[offset + 3] = transceiver;
-    payload[offset + 4] = rx_supported;
-    payload[offset + 5] = tx_supported;
-    payload[offset + 6] = control_tx_allowed;
-    payload[offset + 7] = 1;   // classic CAN supported
-    payload[offset + 8] = 0;   // Classic CAN 2.0 only in this production profile
-    payload[offset + 9] = 8;   // max live DLC in typed v1
-    wr_u32_le(&payload[offset + 10], 500000);
-    wr_u32_le(&payload[offset + 14], 0);
-    payload[offset + 18] = termination_policy;
-    payload[offset + 19] = isolation_policy;
-  };
-
-  write_bus_descriptor(
-      40,
+#if BOARD_HW_PROFILE_MID_MCP2515
+  config.buses[0] = make_capability_bus_descriptor(
+      BOARD_MCP2515_BUS_ID,
+      BOARD_MCP2515_BUS_ROLE,
+      1,
+      1,
+      BOARD_ENABLE_MCP2515 ? 1 : 0,
+      (BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_MCP2515_TX_TEST) ? 1 : 0,
+      BOARD_MCP2515_CONTROL_TX_ALLOWED ? 1 : 0,
+      3,
+      1);
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  config.buses[1] = make_capability_bus_descriptor(
+      BOARD_BUILTIN_CAN_BUS_ID,
+      BOARD_BUILTIN_CAN_BUS_ROLE,
+      2,
+      3,
+      BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
+      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST) ? 1 : 0,
+      BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
       0,
-      1,  // monitor/system
+      0);
+#endif
+#else
+  config.buses[0] = make_capability_bus_descriptor(
+      0,
+      1,
 #if BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
-      3,  // STM32 HAL internal CAN
-      2,  // ADA-5708 TJA1051T/3
+      3,
+      2,
       1,
       1,
 #else
-      4,  // unavailable/pending until internal CAN0 backend exists
-      2,  // ADA-5708 TJA1051T/3 physical target
+      4,
+      2,
       0,
       0,
 #endif
       0,
-      2,  // selectable termination on ADA board
-      1); // non-isolated bench breakout
+      2,
+      1);
 
-  write_bus_descriptor(
-      60,
-      1,
-      2,  // drive/control
-      2,  // Arduino CAN single object on current Portenta variant
-      3,  // Mid Carrier onboard U2 path
+  config.buses[1] = make_capability_bus_descriptor(
+      BOARD_BUILTIN_CAN_BUS_ID,
+      BOARD_BUILTIN_CAN_BUS_ROLE,
+      2,
+      3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
       (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_BUILTIN_CAN_TX_TEST) ? 1 : 0,
-      BOARD_ENABLE_HOST_CAN_TX ? 1 : 0,
-      0,  // termination policy must be verified on the actual carrier/bus
-      0); // isolation policy unknown for the carrier path until schematic/HIL review
+      BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
+      0,
+      0);
+#endif
 #endif
 
-  emit_record(RecordType::Capability, payload, payload_len);
+  uint8_t payload[kCapabilityV2PayloadLen];
+  const uint16_t payload_len = csm::board::build_capability_payload(config, payload, sizeof(payload));
+  if (payload_len > 0) {
+    emit_record(RecordType::Capability, payload, payload_len);
+  }
+}
+
+static void service_capability_advertisement() {
+  const uint32_t now_ms = millis();
+  if (now_ms - last_capability_ms < BOARD_CAPABILITY_PERIOD_MS) {
+    return;
+  }
+  last_capability_ms = now_ms;
+  emit_capability();
 }
 
 static bool can_queue_push(const CanRxItem& item) {
@@ -789,6 +943,43 @@ static void toggle_safety_watchdog_if_needed() {
 #endif
 }
 
+#if BOARD_ENABLE_MCP2515
+static constexpr uint8_t kMcpRegCanctrl = 0x0F;
+static constexpr uint8_t kMcpRegCanintf = 0x2C;
+static constexpr uint8_t kMcpRegEflg = 0x2D;
+static constexpr uint8_t kMcpRegTxb0ctrl = 0x30;
+static constexpr uint8_t kMcpInstrRead = 0x03;
+static constexpr uint8_t kMcpInstrBitModify = 0x05;
+static constexpr uint8_t kMcpCanctrlAbat = 0x10;
+static constexpr uint8_t kMcpCanctrlOsm = 0x08;
+static constexpr uint8_t kMcpTxbAbtf = 0x40;
+static constexpr uint8_t kMcpTxbMloa = 0x20;
+static constexpr uint8_t kMcpTxbTxerr = 0x10;
+static constexpr uint8_t kMcpTxbTxreq = 0x08;
+
+static uint8_t mcp2515_raw_read_register(uint8_t reg) {
+  SPI.beginTransaction(SPISettings(kMcp2515SpiHz, MSBFIRST, SPI_MODE0));
+  digitalWrite(BoardPins::CanSpiCsN, LOW);
+  SPI.transfer(kMcpInstrRead);
+  SPI.transfer(reg);
+  const uint8_t value = SPI.transfer(0x00);
+  digitalWrite(BoardPins::CanSpiCsN, HIGH);
+  SPI.endTransaction();
+  return value;
+}
+
+static void __attribute__((unused)) mcp2515_raw_modify_register(uint8_t reg, uint8_t mask, uint8_t data) {
+  SPI.beginTransaction(SPISettings(kMcp2515SpiHz, MSBFIRST, SPI_MODE0));
+  digitalWrite(BoardPins::CanSpiCsN, LOW);
+  SPI.transfer(kMcpInstrBitModify);
+  SPI.transfer(reg);
+  SPI.transfer(mask);
+  SPI.transfer(data);
+  digitalWrite(BoardPins::CanSpiCsN, HIGH);
+  SPI.endTransaction();
+}
+#endif
+
 static void __attribute__((unused)) reset_mcp_service_state() {
 #if BOARD_ENABLE_MCP2515
   mcp2515_irq_pending = false;
@@ -855,7 +1046,13 @@ static void __attribute__((unused)) service_mcp2515_status_after_drain(bool forc
   }
 
   if (canintf & (MCP2515::CANINTF_TX0IF | MCP2515::CANINTF_TX1IF | MCP2515::CANINTF_TX2IF)) {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+    if (!mcp2515_pending_tx.active) {
+      mcp2515->clearTXInterrupts();
+    }
+#else
     mcp2515->clearTXInterrupts();
+#endif
     handled_status = true;
   }
 
@@ -921,22 +1118,11 @@ static bool init_can_backend() {
 
   SPI.begin();
 
-  auto raw_read_register = [](uint8_t reg) -> uint8_t {
-    SPI.beginTransaction(SPISettings(kMcp2515SpiHz, MSBFIRST, SPI_MODE0));
-    digitalWrite(BoardPins::CanSpiCsN, LOW);
-    SPI.transfer(0x03);  // MCP2515 READ
-    SPI.transfer(reg);
-    const uint8_t value = SPI.transfer(0x00);
-    digitalWrite(BoardPins::CanSpiCsN, HIGH);
-    SPI.endTransaction();
-    return value;
-  };
-
   auto emit_spi_snapshot = [&](uint8_t stage) {
-    const uint8_t canstat = raw_read_register(0x0E);
-    const uint8_t canctrl = raw_read_register(0x0F);
-    const uint8_t canintf = raw_read_register(0x2C);
-    const uint8_t eflg = raw_read_register(0x2D);
+    const uint8_t canstat = mcp2515_raw_read_register(0x0E);
+    const uint8_t canctrl = mcp2515_raw_read_register(kMcpRegCanctrl);
+    const uint8_t canintf = mcp2515_raw_read_register(kMcpRegCanintf);
+    const uint8_t eflg = mcp2515_raw_read_register(kMcpRegEflg);
     const uint16_t detail = (static_cast<uint16_t>(stage) << 8) | canstat;
     const uint32_t packed = (static_cast<uint32_t>(canctrl) << 24) |
                             (static_cast<uint32_t>(canintf) << 16) |
@@ -959,6 +1145,11 @@ static bool init_can_backend() {
     return false;
   }
   err = mcp2515->setNormalMode();
+#if BOARD_MCP2515_TX_USE_ONESHOT
+  if (err == MCP2515::ERROR_OK) {
+    mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlOsm, kMcpCanctrlOsm);
+  }
+#endif
   if (err != MCP2515::ERROR_OK) {
     emit_spi_snapshot(4);
     emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err), 2);
@@ -1026,7 +1217,7 @@ static void pump_can_rx_to_queue(int budget) {
       dlc = 8;
     }
     item.dlc_flags = dlc & 0x0F;
-    item.bus = 0;
+    item.bus = BOARD_MCP2515_BUS_ID;
     memset(item.data, 0, sizeof(item.data));
     for (uint8_t i = 0; i < dlc; ++i) {
       item.data[i] = msg.data[i];
@@ -1048,7 +1239,7 @@ static bool __attribute__((unused)) init_builtin_can_lane() {
     emit_board_event(EventBuiltinCanBeginFailed, 0, 1);
     return false;
   }
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
   builtin_can_tx_total = 0;
   builtin_can_tx_failed_total = 0;
 #endif
@@ -1085,7 +1276,7 @@ static void service_builtin_can_rx_to_queue(int budget) {
       dlc = CanMsg::MAX_DATA_LENGTH;
     }
     item.dlc_flags = dlc & 0x0F;
-    item.bus = 1;
+    item.bus = BOARD_BUILTIN_CAN_BUS_ID;
     memset(item.data, 0, sizeof(item.data));
     for (uint8_t i = 0; i < dlc; ++i) {
       item.data[i] = msg.data[i];
@@ -1104,11 +1295,127 @@ static bool __attribute__((unused)) is_allowed_host_can_id(uint32_t can_id, bool
   if (extended) {
     return false;
   }
-  return can_id == 0x503 || (can_id >= 0x510 && can_id <= 0x513);
+  return can_id == kHostCanTxAllowedPrimaryId ||
+         (can_id >= kHostCanTxAllowedRangeStart && can_id <= kHostCanTxAllowedRangeEnd);
 }
 
+#if BOARD_ENABLE_MCP2515
+static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus,
+                                                                     uint32_t can_id_flags,
+                                                                     uint8_t dlc,
+                                                                     const uint8_t* data) {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  if (mcp2515 == nullptr || mcp2515_pending_tx.active) {
+    return MCP2515::ERROR_ALLTXBUSY;
+  }
+  if ((mcp2515_raw_read_register(kMcpRegTxb0ctrl) & kMcpTxbTxreq) != 0) {
+    return MCP2515::ERROR_ALLTXBUSY;
+  }
+
+  const bool extended = (can_id_flags & (1u << 29)) != 0;
+  const uint32_t can_id = can_id_flags & 0x1FFFFFFF;
+
+  struct can_frame msg;
+  msg.can_id = can_id;
+  if (extended) {
+    msg.can_id |= CAN_EFF_FLAG;
+  }
+  msg.can_dlc = dlc;
+  memset(msg.data, 0, sizeof(msg.data));
+  memcpy(msg.data, data, dlc > 8 ? 8 : dlc);
+
+  mcp2515->clearTXInterrupts();
+  mcp2515->clearMERR();
+  mcp2515->clearERRIF();
+
+  const MCP2515::ERROR err = mcp2515->sendMessage(MCP2515::TXB0, &msg);
+  if (err != MCP2515::ERROR_OK) {
+    return err;
+  }
+
+  mcp2515_pending_tx.active = true;
+  mcp2515_pending_tx.start_ms = millis();
+  mcp2515_pending_tx.bus = bus;
+  mcp2515_pending_tx.can_id_flags = can_id_flags;
+  mcp2515_pending_tx.dlc = dlc;
+  memset(mcp2515_pending_tx.data, 0, sizeof(mcp2515_pending_tx.data));
+  memcpy(mcp2515_pending_tx.data, data, dlc > 8 ? 8 : dlc);
+  return MCP2515::ERROR_OK;
+#else
+  (void)bus;
+  (void)can_id_flags;
+  (void)dlc;
+  (void)data;
+  return MCP2515::ERROR_FAILTX;
+#endif
+}
+
+static void __attribute__((unused)) finish_mcp2515_pending_tx(bool success, uint16_t detail) {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  if (!mcp2515_pending_tx.active) {
+    return;
+  }
+
+  if (success) {
+    mcp2515_tx_total++;
+    emit_can_tx_raw(mcp2515_pending_tx.bus, mcp2515_pending_tx.can_id_flags,
+                    mcp2515_pending_tx.dlc, mcp2515_pending_tx.data,
+                    mcp2515_tx_total, mcp2515_tx_failed_total);
+  } else {
+    mcp2515_tx_failed_total++;
+    emit_board_event(EventMcp2515TxFailed, detail, mcp2515_tx_failed_total);
+  }
+
+  mcp2515_pending_tx.active = false;
+  if (mcp2515 != nullptr) {
+    mcp2515->clearTXInterrupts();
+    mcp2515->clearMERR();
+    mcp2515->clearERRIF();
+  }
+#else
+  (void)success;
+  (void)detail;
+#endif
+}
+
+static void service_mcp2515_tx_audit() {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  if (!mcp2515_pending_tx.active || mcp2515 == nullptr) {
+    return;
+  }
+
+  const uint8_t canintf = mcp2515_raw_read_register(kMcpRegCanintf);
+  const uint8_t ctrl = mcp2515_raw_read_register(kMcpRegTxb0ctrl);
+  const uint8_t eflg = mcp2515_raw_read_register(kMcpRegEflg);
+  const bool tx0_done = (canintf & MCP2515::CANINTF_TX0IF) != 0;
+  const bool txreq = (ctrl & kMcpTxbTxreq) != 0;
+  const bool tx_ctrl_error = (ctrl & (kMcpTxbAbtf | kMcpTxbMloa | kMcpTxbTxerr)) != 0;
+  const bool tx_bus_error = (eflg & (MCP2515::EFLG_TXBO | MCP2515::EFLG_TXEP)) != 0;
+
+  if (tx_ctrl_error || tx_bus_error) {
+    const uint16_t detail = (static_cast<uint16_t>(ctrl) << 8) | eflg;
+    finish_mcp2515_pending_tx(false, detail);
+    return;
+  }
+
+  if (tx0_done || !txreq) {
+    finish_mcp2515_pending_tx(true, 0);
+    return;
+  }
+
+  if (millis() - mcp2515_pending_tx.start_ms >= BOARD_MCP2515_TX_AUDIT_TIMEOUT_MS) {
+    mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlAbat, kMcpCanctrlAbat);
+    delayMicroseconds(20);
+    mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlAbat, 0);
+    const uint16_t detail = (static_cast<uint16_t>(ctrl) << 8) | eflg;
+    finish_mcp2515_pending_tx(false, detail);
+  }
+#endif
+}
+#endif
+
 static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
-#if BOARD_ENABLE_HOST_CAN_TX
+#if BOARD_ENABLE_HOST_CAN_TX_ANY
   uint32_t command_id = 0;
   uint8_t bus = 0;
   uint8_t dlc = 0;
@@ -1139,7 +1446,12 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     can_id_flags |= (1u << 30);
   }
 
-  if (bus != kControlBus) {
+  const bool target_mcp2515 = (bus == BOARD_MCP2515_BUS_ID);
+  const bool target_builtin_can = (bus == BOARD_BUILTIN_CAN_BUS_ID);
+  const bool supported_bus =
+      (target_mcp2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515 && BOARD_MCP2515_CONTROL_TX_ALLOWED) ||
+      (target_builtin_can && BOARD_ENABLE_HOST_CAN_TX_BUILTIN && BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED);
+  if (!supported_bus) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
@@ -1170,6 +1482,46 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
+  uint8_t data[8] = {0};
+  memcpy(data, &payload[11], dlc);
+
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
+  if (target_mcp2515) {
+    if (!can_backend_ok || mcp2515 == nullptr) {
+      host_can_tx_rejected_total++;
+      emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
+                       host_can_tx_request_total);
+      emit_board_event(EventHostCanTxRejected, ControlReasonCanNotReady, host_can_tx_rejected_total);
+      return;
+    }
+
+    const MCP2515::ERROR err = start_mcp2515_tx_audit(bus, can_id_flags, dlc, data);
+    if (err != MCP2515::ERROR_OK) {
+      mcp2515_tx_failed_total++;
+      host_can_tx_rejected_total++;
+      emit_control_ack(command_id, ControlAckRejected, ControlReasonCanWriteFailed, bus, can_id_flags, dlc,
+                       host_can_tx_request_total);
+      emit_board_event(EventMcp2515TxFailed, static_cast<uint16_t>(err), mcp2515_tx_failed_total);
+      return;
+    }
+
+    mcp2515_tx_total++;
+    host_can_tx_accepted_total++;
+    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
+                     host_can_tx_accepted_total);
+    return;
+  }
+#endif
+
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  if (!target_builtin_can) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
+                     host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
+    return;
+  }
+
   if (!builtin_can_tx_ok) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
@@ -1178,8 +1530,6 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
-  uint8_t data[8] = {0};
-  memcpy(data, &payload[11], dlc);
   const uint32_t arduino_id = extended ? arduino::CanExtendedId(can_id) : arduino::CanStandardId(can_id);
   CanMsg msg(arduino_id, dlc, data);
   const int rc = CAN.write(msg);
@@ -1198,6 +1548,12 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
                    host_can_tx_accepted_total);
   emit_can_tx_raw(bus, can_id_flags, dlc, data, builtin_can_tx_total, builtin_can_tx_failed_total);
 #else
+  host_can_tx_rejected_total++;
+  emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
+                   host_can_tx_request_total);
+  emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
+#endif
+#else
   (void)payload;
   (void)len;
 #endif
@@ -1215,73 +1571,23 @@ static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t s
   }
 }
 
-static void drop_host_rx_bytes(uint16_t count) {
-  if (count >= host_rx_len) {
-    host_rx_len = 0;
-    return;
-  }
-  memmove(host_rx_buf, host_rx_buf + count, host_rx_len - count);
-  host_rx_len -= count;
+static void handle_host_downlink_frame(void*, uint8_t version, uint8_t record_type,
+                                       uint16_t seq, const uint8_t* payload, uint16_t len) {
+  dispatch_host_frame(version, record_type, seq, payload, len);
 }
 
-static void process_host_rx_buffer() {
-  while (host_rx_len >= 2) {
-    uint16_t start = 0;
-    while (start + 1 < host_rx_len &&
-           !(host_rx_buf[start] == kFrameSof0 && host_rx_buf[start + 1] == kFrameSof1)) {
-      start++;
-    }
-    if (start > 0) {
-      drop_host_rx_bytes(start);
-    }
-    if (host_rx_len < 9) {
-      return;
-    }
-    if (host_rx_buf[0] != kFrameSof0 || host_rx_buf[1] != kFrameSof1) {
-      drop_host_rx_bytes(1);
-      continue;
-    }
-
-    const uint16_t payload_len = rd_u16_le(&host_rx_buf[7]);
-    if (payload_len > kMaxPayloadLen) {
-      drop_host_rx_bytes(1);
-      continue;
-    }
-
-    const uint16_t frame_len = static_cast<uint16_t>(2 + 1 + 1 + 1 + 2 + 2 + payload_len + 2);
-    if (host_rx_len < frame_len) {
-      return;
-    }
-
-    const uint16_t expected_crc = rd_u16_le(&host_rx_buf[frame_len - 2]);
-    const uint16_t actual_crc = crc16_ccitt(&host_rx_buf[2], static_cast<size_t>(frame_len - 4));
-    if (expected_crc != actual_crc) {
-      host_frame_crc_failed_total++;
-      if ((host_frame_crc_failed_total & 0x0F) == 1) {
-        emit_board_event(EventHostFrameCrcFailed, 0, host_frame_crc_failed_total);
-      }
-      drop_host_rx_bytes(1);
-      continue;
-    }
-
-    dispatch_host_frame(host_rx_buf[2], host_rx_buf[3], rd_u16_le(&host_rx_buf[5]),
-                        &host_rx_buf[9], payload_len);
-    drop_host_rx_bytes(frame_len);
+static void handle_host_downlink_crc_failure(void*) {
+  host_frame_crc_failed_total++;
+  if ((host_frame_crc_failed_total & 0x0F) == 1) {
+    emit_board_event(EventHostFrameCrcFailed, 0, host_frame_crc_failed_total);
   }
 }
+
+static csm::board::HostDownlinkParser host_downlink_parser(
+    handle_host_downlink_frame, handle_host_downlink_crc_failure);
 
 static void service_host_downlink(int budget) {
-  while (budget-- > 0 && Serial.available() > 0) {
-    const int value = Serial.read();
-    if (value < 0) {
-      break;
-    }
-    if (host_rx_len >= kHostRxBufferSize) {
-      drop_host_rx_bytes(1);
-    }
-    host_rx_buf[host_rx_len++] = static_cast<uint8_t>(value);
-  }
-  process_host_rx_buffer();
+  host_downlink_parser.service(Serial, budget);
 }
 
 static void service_builtin_can_tx_test() {
@@ -1308,7 +1614,7 @@ static void service_builtin_can_tx_test() {
     0x07,
   };
 
-  CanMsg msg(arduino::CanStandardId(0x321), sizeof(data), data);
+  CanMsg msg(arduino::CanStandardId(BOARD_BUILTIN_CAN_TX_TEST_ID), sizeof(data), data);
   const int rc = CAN.write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
@@ -1319,7 +1625,44 @@ static void service_builtin_can_tx_test() {
   }
 
   builtin_can_tx_total++;
-  emit_can_tx_raw(1, 0x321, sizeof(data), data, builtin_can_tx_total, builtin_can_tx_failed_total);
+  emit_can_tx_raw(BOARD_BUILTIN_CAN_BUS_ID, BOARD_BUILTIN_CAN_TX_TEST_ID, sizeof(data), data,
+                  builtin_can_tx_total, builtin_can_tx_failed_total);
+#endif
+}
+
+static void service_mcp2515_tx_test() {
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
+  if (!can_backend_ok || mcp2515 == nullptr) {
+    return;
+  }
+
+  const uint32_t now_ms = millis();
+  if (now_ms - last_mcp2515_tx_ms < BOARD_MCP2515_TX_PERIOD_MS) {
+    return;
+  }
+  last_mcp2515_tx_ms = now_ms;
+
+  const uint32_t counter = mcp2515_tx_total + mcp2515_tx_failed_total;
+  uint8_t data[8] = {
+    0xC5,
+    0x10,
+    static_cast<uint8_t>(counter & 0xFF),
+    static_cast<uint8_t>((counter >> 8) & 0xFF),
+    static_cast<uint8_t>((counter >> 16) & 0xFF),
+    static_cast<uint8_t>((counter >> 24) & 0xFF),
+    0x08,
+    0x00,
+  };
+
+  const MCP2515::ERROR err = start_mcp2515_tx_audit(BOARD_MCP2515_BUS_ID, BOARD_MCP2515_TX_TEST_ID,
+                                                    sizeof(data), data);
+  if (err != MCP2515::ERROR_OK) {
+    mcp2515_tx_failed_total++;
+    if ((mcp2515_tx_failed_total & 0x0F) == 1) {
+      emit_board_event(EventMcp2515TxFailed, static_cast<uint16_t>(err), mcp2515_tx_failed_total);
+    }
+    return;
+  }
 #endif
 }
 
@@ -1335,7 +1678,7 @@ static void test_push_fake_can_if_needed() {
   item.mono_us = mono64_us();
   item.can_id_flags = 0x123;
   item.dlc_flags = 8;
-  item.bus = 0;
+  item.bus = BOARD_MCP2515_BUS_ID;
   for (uint8_t i = 0; i < 8; ++i) {
     item.data[i] = i;
   }
@@ -1384,6 +1727,7 @@ static void service_encoder() {
 
 void setup() {
   Serial.begin(115200);
+  init_status_led();
   const uint32_t start_ms = millis();
   while (!Serial && (millis() - start_ms) < 1500) {}
 
@@ -1400,6 +1744,7 @@ void setup() {
   encoder_timer_ok = init_encoder_timer3();
 
   emit_capability();
+  last_capability_ms = millis();
   emit_board_event(EventBoot, encoder_timer_ok ? 1 : 0, 1);
 #if BOARD_HW_PROFILE_MID_TJA1051_DUAL && BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   emit_board_event(EventCan0BackendUnavailable, 0, 1);
@@ -1442,8 +1787,17 @@ void loop() {
 
   service_builtin_can_rx_to_queue(128);
   service_builtin_can_tx_test();
+#if BOARD_ENABLE_MCP2515
+  service_mcp2515_tx_audit();
+#endif
+  service_mcp2515_tx_test();
+  service_status_led();
+  service_capability_advertisement();
   service_encoder();
-  drain_can_records(128);
+  drain_can_records(BOARD_CAN_SERIAL_DRAIN_BUDGET);
+  if (!kTestMode && can_backend_ok) {
+    pump_can_rx_to_queue(512);
+  }
   service_voltage_adc_lane();
 
   const uint32_t now_ms = millis();

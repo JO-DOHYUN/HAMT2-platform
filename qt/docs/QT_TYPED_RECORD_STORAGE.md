@@ -24,8 +24,12 @@ Qt is the evidence workstation. It should receive the board typed stream and pre
 
 4. `EvidenceRuntime`
    - exposes source identity from `CAPABILITY`, not hard-coded bus names
-   - legacy MCP profile: MCP RX `bus=0`, built-in CAN RX/TX `bus=1`, voltage ADC source `0`
-   - Mid Carrier profile: CAN0 + ADA-5708/TJA1051 `bus=0`, J4 terminal CAN1 `bus=1`
+  - profile major `3`: current Mid Carrier CSM. `bus=0` is
+    MCP2515/TJA1050; `bus=1`, when present, is Mid Carrier J4/U2. Display
+    system/monitor or drive/control from each bus descriptor role, not from the
+    bus number.
+  - profile major `2`: deferred dual internal CAN/TJA1051 target
+  - profile major `1`: legacy MCP RX `bus=0`, built-in CAN RX/TX `bus=1`, voltage ADC source `0`
    - shows drop/fault counters from board records
    - never hides raw stream mismatch, CRC loss, queue drop, or replay gaps
 

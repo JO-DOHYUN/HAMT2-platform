@@ -13,11 +13,32 @@
 - built-in CAN RX -> `CAN_RX_RAW bus=1`
 - MCP INT level hint + bounded polling, no falling-edge-only gate
 
+## CSM Regression - mid_mcp2515_csm_single_lane
+- single-lane env `portenta_h7_m7_mid_mcp2515_csm` exposes one bus descriptor
+  for `bus=0`
+- MCP RX -> `CAN_RX_RAW bus=0`
+- host type 10 on `bus=0` accepted IDs -> `CONTROL_ACK` then `CAN_TX_RAW bus=0`
+- PCAN sees the audited board TX frame
+- MCP INT level hint + bounded polling, no falling-edge-only gate
+
+## CSM Regression - mid_mcp2515_j4_dual_csm
+- default final env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+- `CAPABILITY` profile major 3 exposes `bus=0` MCP2515/TJA1050 and `bus=1`
+  Mid Carrier J4/U2 descriptors
+- `BOARD_HEALTH` shows `can_drop=0`, `fifo_overflow=0`, `queue=0`, `fault=0`
+  during final smoke
+- `bus=0 id=0x503` host request -> `CONTROL_ACK` then `CAN_TX_RAW bus=0`
+- `bus=1 id=0x503` host request -> `CONTROL_ACK` then `CAN_TX_RAW bus=1`
+- Kvaser sees the `bus=1` audited frame and reports zero error frames
+- production runtime env has periodic test TX disabled; smoke TX belongs only
+  to `portenta_h7_m7_mid_mcp2515_j4_dual_smoke`
+
 ## CSM Regression - mid_dual_can
+- deferred target, not current CSM default
 - `CAPABILITY` profile major 2 exposes two bus descriptors
 - bus0 descriptor: Mid J14 CAN0 + ADA-5708/TJA1051, monitor/system role
 - bus1 descriptor: Mid J4 terminal CAN1 through onboard U2, drive/control role
-- MCP2515 dependency is absent from the production build path
+- MCP2515 dependency is absent from this deferred dual-internal-CAN build path
 - ArduinoCore single-CAN limitation is reported until an internal CAN0 backend exists
 
 ## VMS Regression
@@ -29,8 +50,14 @@
 - legacy 20-byte import remains offline compatibility only
 
 ## Hardware Test Regression
-Before repeating a failed hardware test, state:
-- confirmed facts
-- unconfirmed hypothesis
-- what changed since the previous failed run
-- expected evidence that would prove or disprove the hypothesis
+- Hardware setup uses `board/docs/HARDWARE_BRINGUP_GATE_HARNESS_KO.md`.
+- Before every hardware test, state one test intent, pass evidence, and fail branch.
+- Before repeating a failed hardware test, state confirmed facts, unconfirmed
+  hypothesis, what changed since the previous failed run, and expected evidence.
+- Do not repeat a test with the same wiring, firmware, PCAN state, and
+  measurement point.
+- Do not move from SPI/register failure to CAN/PCAN reasoning until controller
+  register access is proven.
+- Completion reports must include failed/repeated test count, confirmed facts,
+  remaining unconfirmed hypotheses, final firmware env, and RX/TX/analyzer
+  evidence.

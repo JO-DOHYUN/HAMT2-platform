@@ -1,0 +1,46 @@
+#pragma once
+
+#include <stdint.h>
+
+namespace csm::board {
+
+struct CapabilityBusDescriptor {
+  uint8_t bus_id = 0;
+  uint8_t role = 0;
+  uint8_t backend = 0;
+  uint8_t transceiver = 0;
+  uint8_t rx_supported = 0;
+  uint8_t tx_supported = 0;
+  uint8_t control_tx_allowed = 0;
+  uint8_t classic_can_supported = 1;
+  uint8_t can_fd_supported = 0;
+  uint8_t max_live_dlc = 8;
+  uint32_t nominal_bitrate = 500000;
+  uint32_t data_bitrate = 0;
+  uint8_t termination_policy = 0;
+  uint8_t isolation_policy = 0;
+};
+
+struct CapabilityPayloadConfig {
+  uint8_t profile_major = 1;
+  uint8_t profile_minor = 0;
+  uint32_t can_queue_size = 0;
+  uint32_t encoder_ppr = 0;
+  uint32_t encoder_frequency_limit_hz = 0;
+  bool adc_sample_supported = false;
+  uint8_t adc_channel_count = 0;
+  uint8_t adc_resolution_bits = 0;
+  uint8_t adc_sample_period_ms = 0;
+  uint8_t lane_capability_flags = 0;
+  uint8_t limitation_flags = 0;
+  bool include_v2 = false;
+  uint8_t bus_count = 0;
+  uint16_t capability_v2_flags = 0;
+  CapabilityBusDescriptor buses[2] = {};
+};
+
+uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
+                                  uint8_t* payload,
+                                  uint16_t capacity);
+
+}  // namespace csm::board

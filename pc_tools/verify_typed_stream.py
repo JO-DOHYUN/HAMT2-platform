@@ -18,6 +18,26 @@ TYPE_NAMES = {
     9: "CAPABILITY",
 }
 
+BUS_ROLE_NAMES = {
+    1: "monitor/system",
+    2: "drive/control",
+    3: "debug/legacy",
+}
+
+BUS_BACKEND_NAMES = {
+    1: "MCP2515",
+    2: "ArduinoCAN",
+    3: "STM32HAL",
+    4: "pending",
+}
+
+BUS_TRANSCEIVER_NAMES = {
+    1: "TJA1050",
+    2: "TJA1051",
+    3: "MidCarrierU2",
+    255: "unknown",
+}
+
 
 def crc16_ccitt(data: bytes) -> int:
     crc = 0xFFFF
@@ -49,6 +69,30 @@ def i32(payload: bytes, offset: int) -> int:
 
 def i64(payload: bytes, offset: int) -> int:
     return struct.unpack_from("<q", payload, offset)[0]
+
+
+def capability_bus_desc(payload: bytes, offset: int) -> str:
+    bus_id = payload[offset]
+    role = payload[offset + 1]
+    backend = payload[offset + 2]
+    transceiver = payload[offset + 3]
+    rx_supported = payload[offset + 4]
+    tx_supported = payload[offset + 5]
+    control_tx_allowed = payload[offset + 6]
+    classic = payload[offset + 7]
+    can_fd = payload[offset + 8]
+    max_dlc = payload[offset + 9]
+    nominal = u32(payload, offset + 10)
+    termination = payload[offset + 18]
+    isolation = payload[offset + 19]
+    return (
+        f"bus{bus_id}:role={BUS_ROLE_NAMES.get(role, role)} "
+        f"backend={BUS_BACKEND_NAMES.get(backend, backend)} "
+        f"xcvr={BUS_TRANSCEIVER_NAMES.get(transceiver, transceiver)} "
+        f"rx={rx_supported} tx={tx_supported} control={control_tx_allowed} "
+        f"classic={classic} fd={can_fd} max_dlc={max_dlc} bitrate={nominal} "
+        f"term={termination} iso={isolation}"
+    )
 
 
 def parse_frame(buf: bytearray):
@@ -184,7 +228,8 @@ def describe(frame):
     if rtype == 8 and len(payload) >= 52:
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
-            f"can_drop={u32(payload, 12)} tx_records={u32(payload, 20)} "
+            f"can_drop={u32(payload, 12)} fifo_overflow={u32(payload, 16)} "
+            f"tx_records={u32(payload, 20)} "
             f"queue={u32(payload, 24)} enc_faults={u32(payload, 28)} "
             f"enc_wrap={u32(payload, 32)} pos={i64(payload, 36)} "
             f"safety={payload[44]} inputs=0x{payload[45]:02X} "
@@ -196,13 +241,26 @@ def describe(frame):
         )
 
     if rtype == 9 and len(payload) >= 36:
-        return (
+        base = (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} proto={payload[8]} "
             f"profile={payload[9]}.{payload[10]} mono_unit={payload[11]} "
             f"can_q={u32(payload, 12)} encoder_ppr={u32(payload, 16)} "
             f"encoder_freq_limit={u32(payload, 20)} adc_sample={payload[28]} "
             f"adc_channels={payload[31]} adc_bits={payload[32]} adc_period_ms={payload[33]}"
         )
+        if len(payload) >= 40:
+            bus_count = payload[36]
+            desc_size = payload[37]
+            flags = u16(payload, 38)
+            descs = []
+            if desc_size >= 20:
+                for index in range(min(bus_count, 2)):
+                    offset = 40 + index * desc_size
+                    if len(payload) >= offset + 20:
+                        descs.append(capability_bus_desc(payload, offset))
+            if descs:
+                return f"{base} cap_v2_flags=0x{flags:04X} " + " | ".join(descs)
+        return base
 
     return f"[{name}] seq={seq} len={len(payload)} payload={payload.hex(' ')}"
 

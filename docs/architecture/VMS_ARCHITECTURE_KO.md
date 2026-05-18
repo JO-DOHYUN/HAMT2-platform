@@ -21,7 +21,9 @@ UI/모델은 requested, accepted/rejected, sent audit, feedback observed를 별�
 표시한다. `CONTROL_ACK`만으로 sent를 표시하지 않는다.
 
 ## Bus labeling
-Qt/VMS must not hard-code `bus=0` as MCP. Bus display names, roles, backends,
-transceivers, bitrates, and TX permissions come from `CAPABILITY`. Legacy
-profile major `1` keeps MCP/built-in labels. Mid Carrier profile major `2`
-displays CAN0 + ADA-5708/TJA1051 as `bus=0` and J4 terminal CAN1 as `bus=1`.
+Qt/VMS must not hard-code bus labels. Bus display names, roles, backends,
+transceivers, bitrates, and TX permissions come from `CAPABILITY`. Current Mid
+Carrier profile major `3` displays MCP2515/TJA1050 `bus=0` and, in the final
+dual CSM env, Mid Carrier J4/U2 `bus=1` with RX/TX enabled according to each
+descriptor. Deferred profile major `2` remains the unproven dual internal
+CAN/TJA1051 target.

@@ -21,7 +21,10 @@ enum ControlAckReason : uint8_t {
   ControlReasonBadProtocol = 8,
 };
 
-static constexpr uint8_t kControlBus = 1;
+static constexpr uint8_t kNoFixedControlBus = 0xFF;
+static constexpr uint32_t kHostCanTxAllowedPrimaryId = 0x503;
+static constexpr uint32_t kHostCanTxAllowedRangeStart = 0x510;
+static constexpr uint32_t kHostCanTxAllowedRangeEnd = 0x513;
 static constexpr uint16_t kHostCanTxRequestPayloadLen = 19;
 static constexpr uint16_t kCanRawPayloadLen = 30;
 static constexpr uint16_t kControlAckPayloadLen = 28;

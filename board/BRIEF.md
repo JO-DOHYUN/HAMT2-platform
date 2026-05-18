@@ -6,11 +6,12 @@
 - encoder data sheet: `dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
 - final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
 - current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
-- current bench CAN: MCP2515 + TJA1050 SPI module, `MCP_8MHZ`, `CAN_500KBPS`, `CS/SCK/SI/SO/INT` level shifted; Portenta built-in CAN `PH13/PB8` is a separate physical CAN bus through an external transceiver
-- next hardware target: Portenta H7 M7 + Mid Carrier ASX00055. Production
-  `bus=0` is Mid Carrier J14 `CAN0_TX/RX` wired to ADA-5708 TJA1051T/3.
-  Production `bus=1` is Mid Carrier J4 terminal CAN1 through onboard U2.
-  MCP2515/TJA1050 is bench/legacy only for this target.
+- current CSM CAN: Portenta H7 M7 + Mid Carrier ASX00055 + MCP2515/TJA1050 SPI
+  module, `MCP_8MHZ`, `CAN_500KBPS`, 2 MHz SPI, `CS/SCK/SI/SO/INT` level shifted.
+  `bus=0` is the active typed RX and audited control TX lane.
+- deferred hardware target: dual internal CAN0/CAN1 through TJA1051-class
+  transceivers. This is not active because the current ArduinoCore Portenta
+  profile exposes only one practical CAN object.
 - board target: Arduino Portenta H7 M7, `framework = arduino`
 - current firmware protocol: framed typed records v1
   - SOF `0xA5 0x5A`, version, record type, flags, sequence, payload length, payload, CRC16-CCITT
@@ -23,13 +24,34 @@
 - verified CAN + voltage stream after voltage-lane edit: PASS, 2026-04-22, `portenta_h7_m7_dual_can_basic` uploaded by DFU. Stream contained `CAN_RX_RAW` on `bus=0` ID `0x530` with `can_drop=0`, `CAN_TX_RAW` on `bus=1` ID `0x321` with TX success counter increasing, and `ADC_SAMPLE` source `0` channels `0..3` at 12-bit raw counts. Health showed `flags=0x2E` (`can_ok=1`, `builtin_can_tx_ok=1`, `mcp_int_level=1`, `voltage_adc_ok=1`) and `fault=0x00000000`.
 - verified built-in CAN RX lane: PASS, 2026-04-23, `portenta_h7_m7_dual_can_basic` uploaded on `COM6`. Stream contained `CAN_RX_RAW bus=1` from the Portenta built-in CAN bus, `CAN_TX_RAW bus=1 id=0x321`, `CAN_RX_RAW bus=0 id=0x530`, `ADC_SAMPLE`, and `BOARD_HEALTH` with `can_drop=0`, `queue=0`, `fault=0x00000000`.
 - verified host control downlink: PASS, 2026-04-23, `HOST_CAN_TX_REQUEST` from USB was parsed and written to built-in CAN. Tests sent `0x503` and `0x510`; board returned `CONTROL_ACK status=1 reason=0` followed by `CAN_TX_RAW bus=1` for each, with `failed=0`.
+- verified Mid Carrier MCP RX/TX bring-up: PASS, 2026-05-15,
+  `portenta_h7_m7_mcp_int_tx_test` uploaded by DFU and streamed on `COM7`.
+  MCP2515/TJA1050 at `MCP_8MHZ`, `CAN_500KBPS` received PCAN traffic as
+  `CAN_RX_RAW bus=0`, health showed `can_ok=1`, and board TX test emitted
+  `CAN_TX_RAW bus=0 id=0x321 failed=0`; PCANBasic read five `0x321` frames.
+- verified Mid Carrier CSM TX/RX audit: PASS, 2026-05-15,
+  `portenta_h7_m7_mid_mcp2515_csm_tx_test` uploaded on `COM7` with 2 MHz SPI.
+  Stream showed `CAN_RX_RAW bus=0`, periodic `CAN_TX_RAW bus=0 id=0x321
+  failed=0`, `BOARD_HEALTH can_ok=1 can_drop=0 fifo_overflow=0`, and repeated
+  `CAPABILITY profile=3 bus0 role=drive/control backend=MCP2515`.
+  Host request `0x503` returned `CONTROL_ACK status=1` followed by matching
+  `CAN_TX_RAW failed=0`.
+- verified Mid Carrier dual CSM final env: PASS, 2026-05-15,
+  `portenta_h7_m7_mid_mcp2515_j4_dual_csm` uploaded on `COM7`. `CAPABILITY`
+  advertised `bus0: MCP2515/TJA1050 monitor/system` and
+  `bus1: ArduinoCAN/MidCarrierU2 drive/control`. Kvaser on J4 sent/received at
+  500 kbps with zero error frames after the J4 SW2 pair was moved to the
+  CAN-enabled position. Host `bus=1 id=0x503` produced
+  `CONTROL_ACK status=1`, `CAN_TX_RAW bus=1 failed=0`, and Kvaser received the
+  same payload. Host `bus=0 id=0x503` produced `CONTROL_ACK status=1` and
+  `CAN_TX_RAW bus=0 failed=0`.
 - known failed INT design: the previous edge-gated `BOARD_CAN_USE_INT=1` implementation caused red blinking. Do not restore that design. MCP2515 `INT_N` is level-signaled, so RX authority must come from MCP2515 status/register drain, not from a single falling-edge gate.
 
 ## Current Architecture Goal
-- preserve the verified typed CAN/ADC/control legacy baseline while moving the
-  CSM code from a single-file sketch toward scoped modules
-- migrate the production target to Mid Carrier dual internal CAN semantics only
-  after pinout, CAPABILITY, health, and build-profile contracts are explicit
+- preserve the verified typed CAN/ADC/control baseline while moving the CSM code
+  from a single-file sketch toward scoped modules
+- keep the current Mid Carrier MCP2515 CSM profile explicit in CAPABILITY,
+  health, and build profiles before revisiting a different controller path
 - treat `shared/docs/TRANSPORT_AND_RECORDS_KO.md` as the canonical wire contract
 - treat `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as the latest integration
   decision input, not as a replacement for scoped AGENTS/BRIEF docs
@@ -54,17 +76,18 @@
 - host control must be auditable from intent to board decision to actual CAN TX to feedback/event; `CONTROL_ACK` is not final CAN success evidence
 - drive encoder input is fixed as industrial HTL front-end plus Portenta `PC6`/`PC7` TIM3 encoder mode and `PA8` index input; direct 24 V HTL to GPIO is forbidden
 - carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
-- legacy bench CAN uses MCP2515 over SPI on `D7..D11`; bench firmware uses
-  `INT_N` as a level hint. `portenta_h7_m7_dual_can_basic` keeps that MCP RX
-  path enabled, receives and audits the Portenta built-in CAN controller
-  (`PH13/PB8`) as `bus=1`, accepts Qt host CAN TX requests for `0x503` and
-  `0x510..0x513`, sends a 500 ms example frame on that built-in CAN controller,
-  and owns the first voltage raw lane on `A0/A1/A6/A7`.
-- Mid Carrier production direction is capability-driven: `bus=0` is CAN0 plus
-  ADA-5708/TJA1051 for monitor/system CAN, and `bus=1` is J4 terminal CAN1 for
-  drive/control CAN. Current ArduinoCore exposes only one Portenta CAN object in
-  this repo, so CAN0 needs an internal CAN0 backend before it can be claimed as a
-  working live lane.
+- current Mid Carrier CSM CAN uses MCP2515 over SPI on `D7..D11`; firmware uses
+  `INT_N` as a level hint, receives `CAN_RX_RAW bus=0`, accepts host CAN TX
+  requests for the allowlisted IDs on `bus=0`, and audits successful writes as
+  `CAN_TX_RAW bus=0`.
+- optional final dual-channel Mid Carrier CSM env additionally exposes the J4
+  CAN1 terminal as `bus=1` through the onboard U2 transceiver. It receives
+  `CAN_RX_RAW bus=1` and accepts allowlisted host TX requests on `bus=1`.
+- the same active MCP2515 lane can be advertised as drive/control or
+  monitor/system with build-profile role flags; Qt/VMS must follow
+  `CAPABILITY` bus descriptors instead of hard-coded labels.
+- the previous dual internal CAN direction remains a deferred research path, not
+  the active CSM hardware contract.
 
 ## Working Features To Preserve
 - current CAN raw capture remains truthful
@@ -78,8 +101,8 @@
 - drop/overflow visibility is preserved or improved
 - control and capture paths cannot hide side effects from each other
 - compile succeeds for the current firmware baseline after document finalization
-- `portenta_h7_m7_mid_dual_can20` compiles without MCP2515 production
-  dependency before larger internal CAN code changes begin
+- `portenta_h7_m7_mid_mcp2515_csm` compiles and HIL verifies MCP RX/TX before
+  larger code changes begin
 
 ## Risks
 - open items:

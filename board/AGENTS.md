@@ -23,7 +23,11 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - Physical hardware concept, pinout, electrical interface, CAN/encoder carrier design: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md` and the specific hardware sub-doc needed
 - Mid Carrier dual CAN migration: `board/docs/HARDWARE_MID_TJA1051_DUAL_CAN_KO.md`
 - Encoder electrical input or DBS60E wiring/rate checks: `board/docs/ENCODER_DBS60E_INPUT_KO.md`
-- Hardware connection/setup/test/verification only: `board/docs/HARDWARE_TEST_AI_AUX_KO.md`
+- Hardware connection/setup/test/verification only:
+  `board/docs/HARDWARE_BRINGUP_GATE_HARNESS_KO.md` first, then
+  `board/docs/HARDWARE_TEST_AI_AUX_KO.md`
+- Mid Carrier MCP2515 bring-up failure history:
+  `board/docs/HARDWARE_BRINGUP_POSTMORTEM_2026_05_15_MID_MCP2515_KO.md`
 - HIL/soak/flood acceptance runs only: `board/docs/HIL_RUNBOOK_KO.md`
 - Safety state machine or hard safety gate work: `board/docs/SAFETY_STATE_MACHINE_KO.md`
 
@@ -33,10 +37,10 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - control must be auditable: host intent -> board accept -> actual tx -> ack/event
 - direct analog samples must never be disguised as CAN frames
 - voltage raw samples use `ADC_SAMPLE`; scaling/calibration belongs to host/profile metadata
-- current MCP bench baseline uses MCP RX as `bus=0` and Portenta built-in CAN TX
-  as `bus=1`
-- Mid Carrier production target uses internal CAN0 + TJA1051 as `bus=0` and Mid
-  Carrier terminal CAN1 as `bus=1`; hosts must learn labels from `CAPABILITY`
+- final Mid Carrier dual CSM profile uses external MCP2515/TJA1050 RX and
+  audited TX as `bus=0`, and Mid Carrier J4/U2 RX and audited TX as `bus=1`
+- the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
+  labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect
 
 ## Architecture Direction
@@ -53,7 +57,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - `src/main.cpp` should shrink toward setup/loop orchestration; protocol,
   record helpers, host parsing, lane IO, control, safety, health, and capability
   logic should move into scoped modules without changing the typed wire contract.
-- MCP2515 code is legacy/bench only in the Mid Carrier production target.
+- MCP2515 remains the current working external controller path; J4/U2 uses the
+  single Arduino CAN object as the second HIL-proven physical channel.
 
 ## Delivery Rules
 - prefer patch-sized changes unless architecture reset is explicitly needed

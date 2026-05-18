@@ -44,7 +44,7 @@ def main() -> None:
     parser.add_argument("--port", default="COM6")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--command-id", type=lambda s: int(s, 0), default=1)
-    parser.add_argument("--bus", type=int, default=1)
+    parser.add_argument("--bus", type=int, default=0)
     parser.add_argument("--id", type=lambda s: int(s, 0), default=0x503)
     parser.add_argument("--data", default="00 00 00 00 00 00 00 00")
     parser.add_argument("--extended", action="store_true")

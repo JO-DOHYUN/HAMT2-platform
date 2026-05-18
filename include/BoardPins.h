@@ -4,15 +4,12 @@
 
 namespace BoardPins {
 
-// Mid Carrier production target:
-// - bus0: J14 pin 26 CAN0_TX and J14 pin 28 CAN0_RX wired to ADA-5708
-//   TJA1051T/3. The current ArduinoCore Portenta variant does not expose this
-//   as a second CAN object, so firmware must not claim bus0 support until a HAL
-//   internal CAN backend is implemented and HIL-proven.
-// - bus1: J4 pin 5 CANH and J4 pin 6 CANL through Mid Carrier onboard U2. The
-//   current Arduino CAN object maps to PH13/PB8, labeled CAN1_TX/CAN1_RX on the
-//   Portenta high-density connector.
-// Legacy bench bring-up uses an MCP2515 + TJA1050 module over SPI.
+// Current Mid Carrier CSM target:
+// - bus0: external MCP2515 + TJA1050 module over SPI on D7..D11.
+// - CS/SCK/SI are Portenta -> MCP signals and SO/INT are MCP -> Portenta
+//   signals; 5 V MCP modules require level shifting in the correct direction.
+// - The earlier internal CAN0/CAN1 + TJA1051 direction is deferred until a
+//   second internal CAN backend is implemented and HIL-proven.
 
 static constexpr pin_size_t SafetyWatchdogToggle = D0;  // PH15
 static constexpr pin_size_t CanTxEnable = D1;           // PK1, default disabled by hardware pulldown
