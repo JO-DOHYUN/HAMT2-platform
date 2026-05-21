@@ -30,12 +30,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - uses: jurplel/install-qt-action@v4
         with:
           version: 6.10.2
           host: windows
           target: desktop
           arch: win64_msvc2022_64
+          modules: qtserialport
 
       - name: Resolve Qt prefix path
         shell: powershell
