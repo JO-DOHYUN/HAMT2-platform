@@ -1,0 +1,21 @@
+# Local IDE and build output
+.vs/
+out/
+build/
+
+# Local CMake/user environment overrides
+CMakeUserPresets.json
+*.user
+
+# Large handoff or visual artifacts kept outside source policy
+*.zip
+fix*.png
+
+# Runtime/capture temporary output
+*.bin
+*.part
+*.tmp
+*.log
+capture.stream
+events.jsonl
+session.meta.json

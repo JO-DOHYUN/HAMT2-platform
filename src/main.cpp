@@ -1,5 +1,9 @@
 #include <Arduino.h>
 #include <cstring>
+#include <mbed.h>
+#if defined(SERIAL_CDC)
+#include "USB/PluggableUSBSerial.h"
+#endif
 
 #include "BoardPins.h"
 #include "board/CapabilityPublisher.h"
@@ -81,6 +85,18 @@
 #define BOARD_ENABLE_STATUS_LED 1
 #endif
 
+#ifndef BOARD_ENABLE_RUNTIME_WATCHDOG
+#define BOARD_ENABLE_RUNTIME_WATCHDOG 1
+#endif
+
+#ifndef BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS
+#define BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS 3000
+#endif
+
+#ifndef BOARD_USB_CDC_RECONNECT_RESET_MS
+#define BOARD_USB_CDC_RECONNECT_RESET_MS 1500
+#endif
+
 #ifndef BOARD_ENABLE_MCP2515_TX_TEST
 #define BOARD_ENABLE_MCP2515_TX_TEST 0
 #endif
@@ -98,7 +114,7 @@
 #endif
 
 #ifndef BOARD_MCP2515_TX_USE_ONESHOT
-#define BOARD_MCP2515_TX_USE_ONESHOT (BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_MCP2515_TX_TEST)
+#define BOARD_MCP2515_TX_USE_ONESHOT 0
 #endif
 
 #ifndef BOARD_ENABLE_BUILTIN_CAN_TX_TEST
@@ -287,6 +303,7 @@ static volatile uint32_t can_rx_count_total = 0;
 static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
 static volatile uint32_t serial_record_tx_total = 0;
+static volatile uint32_t serial_record_drop_total = 0;
 static uint32_t host_frame_crc_failed_total = 0;
 static uint32_t host_heartbeat_total = 0;
 static uint32_t host_control_session_total = 0;
@@ -299,6 +316,12 @@ static volatile uint64_t encoder_index_mono_us = 0;
 static volatile uint32_t encoder_index_count = 0;
 
 static uint16_t transport_seq = 0;
+static constexpr uint32_t kSerialTxRingSize = 8192;
+static constexpr uint32_t kSerialTxRingMask = kSerialTxRingSize - 1;
+static uint8_t serial_tx_ring[kSerialTxRingSize];
+static uint32_t serial_tx_head = 0;
+static uint32_t serial_tx_tail = 0;
+static uint32_t serial_tx_blocked_since_ms = 0;
 #if BOARD_ENABLE_MCP2515
 static MCP2515* mcp2515 = nullptr;
 static volatile bool mcp2515_irq_pending = false;
@@ -349,6 +372,7 @@ static uint32_t last_builtin_can_tx_ms = 0;
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
 static uint32_t mcp2515_tx_total = 0;
 static uint32_t mcp2515_tx_failed_total = 0;
+static uint32_t mcp2515_tx_queue_full_total = 0;
 struct Mcp2515PendingTx {
   bool active;
   uint32_t start_ms;
@@ -358,6 +382,11 @@ struct Mcp2515PendingTx {
   uint8_t data[8];
 };
 static Mcp2515PendingTx mcp2515_pending_tx = {};
+static constexpr uint32_t kMcp2515TxQueueSize = 256;
+static constexpr uint32_t kMcp2515TxQueueMask = kMcp2515TxQueueSize - 1;
+static Mcp2515PendingTx mcp2515_tx_queue[kMcp2515TxQueueSize];
+static uint32_t mcp2515_tx_q_head = 0;
+static uint32_t mcp2515_tx_q_tail = 0;
 #endif
 
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
@@ -385,10 +414,140 @@ static uint32_t last_capability_ms = 0;
 static uint32_t last_encoder_derived_ms = 0;
 static uint32_t last_watchdog_toggle_ms = 0;
 static uint32_t last_can_init_retry_ms = 0;
+static bool usb_host_was_connected = false;
+static uint32_t usb_disconnected_since_ms = 0;
+
+static uint32_t serial_tx_queued_bytes() {
+  return (serial_tx_head - serial_tx_tail) & kSerialTxRingMask;
+}
+
+static uint32_t serial_tx_free_bytes() {
+  return (kSerialTxRingSize - 1) - serial_tx_queued_bytes();
+}
+
+static void clear_serial_tx_ring() {
+  serial_tx_head = 0;
+  serial_tx_tail = 0;
+  serial_tx_blocked_since_ms = 0;
+}
+
+static bool enqueue_serial_tx_bytes(const uint8_t* data, uint32_t len) {
+  if (len == 0) return true;
+  if (data == nullptr || len > serial_tx_free_bytes()) return false;
+  for (uint32_t i = 0; i < len; ++i) {
+    serial_tx_ring[serial_tx_head] = data[i];
+    serial_tx_head = (serial_tx_head + 1) & kSerialTxRingMask;
+  }
+  return true;
+}
+
+static void service_serial_tx(uint32_t byte_budget = 512) {
+#if defined(SERIAL_CDC)
+  uint8_t chunk[64];
+  while (byte_budget > 0 && serial_tx_tail != serial_tx_head) {
+    uint32_t n = 0;
+    while (n < sizeof(chunk) && n < byte_budget && serial_tx_tail != serial_tx_head) {
+      chunk[n++] = serial_tx_ring[serial_tx_tail];
+      serial_tx_tail = (serial_tx_tail + 1) & kSerialTxRingMask;
+    }
+    if (n == 0) break;
+
+    uint32_t actual = 0;
+    _SerialUSB.send_nb(chunk, n, &actual, true);
+    if (actual == 0) {
+      for (uint32_t i = actual; i < n; ++i) {
+        serial_tx_tail = (serial_tx_tail - 1) & kSerialTxRingMask;
+      }
+      const uint32_t now_ms = millis();
+      if (serial_tx_blocked_since_ms == 0) {
+        serial_tx_blocked_since_ms = now_ms;
+      } else if (now_ms - serial_tx_blocked_since_ms > 250) {
+        clear_serial_tx_ring();
+      }
+      break;
+    }
+    serial_tx_blocked_since_ms = 0;
+    if (actual < n) {
+      for (uint32_t i = actual; i < n; ++i) {
+        serial_tx_tail = (serial_tx_tail - 1) & kSerialTxRingMask;
+      }
+      break;
+    }
+    byte_budget -= actual;
+  }
+#else
+  (void)byte_budget;
+#endif
+}
+
+static void service_usb_cdc_reconnect_watchdog() {
+#if defined(SERIAL_CDC)
+  const bool connected = _SerialUSB.connected();
+  if (connected) {
+    usb_host_was_connected = true;
+    usb_disconnected_since_ms = 0;
+    return;
+  }
+
+  if (!usb_host_was_connected) {
+    return;
+  }
+
+  const uint32_t now_ms = millis();
+  if (usb_disconnected_since_ms == 0) {
+    usb_disconnected_since_ms = now_ms;
+    clear_serial_tx_ring();
+    return;
+  }
+
+  if (now_ms - usb_disconnected_since_ms >= BOARD_USB_CDC_RECONNECT_RESET_MS) {
+    delay(10);
+    NVIC_SystemReset();
+  }
+#endif
+}
+
+static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16_t len, uint8_t flags = 0) {
+  if (len > kMaxPayloadLen) {
+    return false;
+  }
+
+#if !defined(SERIAL_CDC)
+  return csm::emit_typed_record(Serial, type, payload, len, transport_seq, flags);
+#else
+  uint8_t frame[2 + 1 + 1 + 1 + 2 + 2 + kMaxPayloadLen + 2];
+  size_t pos = 0;
+  frame[pos++] = kFrameSof0;
+  frame[pos++] = kFrameSof1;
+  frame[pos++] = kProtocolVersion;
+  frame[pos++] = static_cast<uint8_t>(type);
+  frame[pos++] = flags;
+  wr_u16_le(&frame[pos], transport_seq++);
+  pos += 2;
+  wr_u16_le(&frame[pos], len);
+  pos += 2;
+  if (len > 0 && payload != nullptr) {
+    memcpy(&frame[pos], payload, len);
+    pos += len;
+  }
+
+  const uint16_t crc = crc16_ccitt(&frame[2], pos - 2);
+  wr_u16_le(&frame[pos], crc);
+  pos += 2;
+
+  if (!enqueue_serial_tx_bytes(frame, static_cast<uint32_t>(pos))) {
+    return false;
+  }
+  service_serial_tx(512);
+  return true;
+#endif
+}
 
 static void emit_record(RecordType type, const uint8_t* payload, uint16_t len, uint8_t flags = 0) {
-  if (csm::emit_typed_record(Serial, type, payload, len, transport_seq, flags)) {
+  if (enqueue_typed_record(type, payload, len, flags)) {
     serial_record_tx_total++;
+  } else {
+    serial_record_drop_total++;
   }
 }
 
@@ -404,6 +563,18 @@ static void service_status_led() {
 static void init_status_led() {}
 static void service_status_led() {}
 #endif
+
+static void init_runtime_watchdog() {
+#if BOARD_ENABLE_RUNTIME_WATCHDOG
+  mbed::Watchdog::get_instance().start(BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS);
+#endif
+}
+
+static void kick_runtime_watchdog() {
+#if BOARD_ENABLE_RUNTIME_WATCHDOG
+  mbed::Watchdog::get_instance().kick();
+#endif
+}
 
 static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
   uint8_t payload[16];
@@ -429,6 +600,7 @@ using csm::ControlReasonIdNotAllowed;
 using csm::ControlReasonHostTimeout;
 using csm::ControlReasonNotArmed;
 using csm::ControlReasonOk;
+using csm::ControlReasonQueueFull;
 using csm::ControlReasonSafetyLockout;
 using csm::ControlReasonUnsupportedFrame;
 using csm::ControlReasonUnsupportedCommand;
@@ -843,6 +1015,8 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 #if BOARD_ENABLE_VOLTAGE_ADC
   payload[47] |= voltage_adc_ok ? (1u << 5) : 0;
 #endif
+  payload[47] |= serial_tx_queued_bytes() > 0 ? (1u << 6) : 0;
+  payload[47] |= serial_record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
   payload[52] = 2;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
@@ -1404,6 +1578,44 @@ static bool __attribute__((unused)) is_allowed_host_can_id(uint32_t can_id, bool
 }
 
 #if BOARD_ENABLE_MCP2515
+static uint32_t __attribute__((unused)) mcp2515_tx_queue_count() {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  return (mcp2515_tx_q_head - mcp2515_tx_q_tail) & kMcp2515TxQueueMask;
+#else
+  return 0;
+#endif
+}
+
+static bool __attribute__((unused)) enqueue_mcp2515_tx(uint8_t bus,
+                                                       uint32_t can_id_flags,
+                                                       uint8_t dlc,
+                                                       const uint8_t* data) {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  const uint32_t next = (mcp2515_tx_q_head + 1) & kMcp2515TxQueueMask;
+  if (next == mcp2515_tx_q_tail) {
+    mcp2515_tx_queue_full_total++;
+    return false;
+  }
+
+  Mcp2515PendingTx& item = mcp2515_tx_queue[mcp2515_tx_q_head];
+  item.active = true;
+  item.start_ms = 0;
+  item.bus = bus;
+  item.can_id_flags = can_id_flags;
+  item.dlc = dlc;
+  memset(item.data, 0, sizeof(item.data));
+  memcpy(item.data, data, dlc > 8 ? 8 : dlc);
+  mcp2515_tx_q_head = next;
+  return true;
+#else
+  (void)bus;
+  (void)can_id_flags;
+  (void)dlc;
+  (void)data;
+  return false;
+#endif
+}
+
 static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus,
                                                                      uint32_t can_id_flags,
                                                                      uint8_t dlc,
@@ -1415,6 +1627,9 @@ static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus
   if ((mcp2515_raw_read_register(kMcpRegTxb0ctrl) & kMcpTxbTxreq) != 0) {
     return MCP2515::ERROR_ALLTXBUSY;
   }
+  mcp2515_raw_modify_register(kMcpRegTxb0ctrl,
+                              kMcpTxbAbtf | kMcpTxbMloa | kMcpTxbTxerr,
+                              0);
 
   const bool extended = (can_id_flags & (1u << 29)) != 0;
   const uint32_t can_id = can_id_flags & 0x1FFFFFFF;
@@ -1454,6 +1669,31 @@ static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus
 #endif
 }
 
+static bool __attribute__((unused)) start_next_mcp2515_queued_tx() {
+#if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
+  if (mcp2515_pending_tx.active || mcp2515 == nullptr || mcp2515_tx_q_tail == mcp2515_tx_q_head) {
+    return false;
+  }
+
+  const Mcp2515PendingTx& item = mcp2515_tx_queue[mcp2515_tx_q_tail];
+  const MCP2515::ERROR err = start_mcp2515_tx_audit(item.bus, item.can_id_flags, item.dlc, item.data);
+  if (err == MCP2515::ERROR_OK) {
+    mcp2515_tx_q_tail = (mcp2515_tx_q_tail + 1) & kMcp2515TxQueueMask;
+    return true;
+  }
+  if (err == MCP2515::ERROR_ALLTXBUSY) {
+    return false;
+  }
+
+  mcp2515_tx_q_tail = (mcp2515_tx_q_tail + 1) & kMcp2515TxQueueMask;
+  mcp2515_tx_failed_total++;
+  emit_board_event(EventMcp2515TxFailed, static_cast<uint16_t>(err), mcp2515_tx_failed_total);
+  return false;
+#else
+  return false;
+#endif
+}
+
 static void __attribute__((unused)) finish_mcp2515_pending_tx(bool success, uint16_t detail) {
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
   if (!mcp2515_pending_tx.active) {
@@ -1475,6 +1715,9 @@ static void __attribute__((unused)) finish_mcp2515_pending_tx(bool success, uint
     mcp2515->clearTXInterrupts();
     mcp2515->clearMERR();
     mcp2515->clearERRIF();
+    mcp2515_raw_modify_register(kMcpRegTxb0ctrl,
+                                kMcpTxbAbtf | kMcpTxbMloa | kMcpTxbTxerr,
+                                0);
   }
 #else
   (void)success;
@@ -1485,6 +1728,7 @@ static void __attribute__((unused)) finish_mcp2515_pending_tx(bool success, uint
 static void service_mcp2515_tx_audit() {
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
   if (!mcp2515_pending_tx.active || mcp2515 == nullptr) {
+    start_next_mcp2515_queued_tx();
     return;
   }
 
@@ -1499,11 +1743,13 @@ static void service_mcp2515_tx_audit() {
   if (tx_ctrl_error || tx_bus_error) {
     const uint16_t detail = (static_cast<uint16_t>(ctrl) << 8) | eflg;
     finish_mcp2515_pending_tx(false, detail);
+    start_next_mcp2515_queued_tx();
     return;
   }
 
   if (tx0_done || !txreq) {
     finish_mcp2515_pending_tx(true, 0);
+    start_next_mcp2515_queued_tx();
     return;
   }
 
@@ -1513,6 +1759,7 @@ static void service_mcp2515_tx_audit() {
     mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlAbat, 0);
     const uint16_t detail = (static_cast<uint16_t>(ctrl) << 8) | eflg;
     finish_mcp2515_pending_tx(false, detail);
+    start_next_mcp2515_queued_tx();
   }
 #endif
 }
@@ -1608,16 +1855,15 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
       return;
     }
 
-    const MCP2515::ERROR err = start_mcp2515_tx_audit(bus, can_id_flags, dlc, data);
-    if (err != MCP2515::ERROR_OK) {
-      mcp2515_tx_failed_total++;
+    if (!enqueue_mcp2515_tx(bus, can_id_flags, dlc, data)) {
       host_can_tx_rejected_total++;
-      emit_control_ack(command_id, ControlAckRejected, ControlReasonCanWriteFailed, bus, can_id_flags, dlc,
+      emit_control_ack(command_id, ControlAckRejected, ControlReasonQueueFull, bus, can_id_flags, dlc,
                        host_can_tx_request_total);
-      emit_board_event(EventMcp2515TxFailed, static_cast<uint16_t>(err), mcp2515_tx_failed_total);
+      emit_board_event(EventHostCanTxRejected, ControlReasonQueueFull, host_can_tx_rejected_total);
       return;
     }
 
+    start_next_mcp2515_queued_tx();
     host_can_tx_accepted_total++;
     emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
                      host_can_tx_accepted_total);
@@ -1977,8 +2223,11 @@ static void service_encoder() {
 void setup() {
   Serial.begin(115200);
   init_status_led();
+  init_runtime_watchdog();
   const uint32_t start_ms = millis();
-  while (!Serial && (millis() - start_ms) < 1500) {}
+  while (!Serial && (millis() - start_ms) < 1500) {
+    kick_runtime_watchdog();
+  }
 
   init_safety_pins();
   safety_supervisor.begin(millis());
@@ -2018,7 +2267,10 @@ void setup() {
 }
 
 void loop() {
+  kick_runtime_watchdog();
+  service_usb_cdc_reconnect_watchdog();
   mono64_us();
+  service_serial_tx(512);
   service_host_downlink(256);
   update_safety_state();
   toggle_safety_watchdog_if_needed();
@@ -2056,4 +2308,7 @@ void loop() {
     emit_board_health(snap);
     last_health_ms = now_ms;
   }
+  service_serial_tx(1024);
+  service_usb_cdc_reconnect_watchdog();
+  kick_runtime_watchdog();
 }

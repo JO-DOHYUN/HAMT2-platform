@@ -2,8 +2,8 @@
 
 ## Purpose
 This root file is a routing guide for agents. It does not replace the scoped
-rules under `board/`, `qt/`, or `shared/`. This branch freezes the current CSM
-baseline before VMS integration; avoid broad repository restructuring here.
+rules under `board/`, `qt/`, or `shared/`. This repository now carries both the
+CSM board firmware and the VSM Qt workstation source.
 
 ## Read Order
 1. Read `BRIEF.md` for the current repository-level state.
@@ -40,5 +40,6 @@ baseline before VMS integration; avoid broad repository restructuring here.
   in the same change.
 - If MCP behavior changes, preserve MCP `bus=0`, keep bus role/backend exposed
   through `CAPABILITY`, and do not restore the failed MCP falling-edge INT gate.
-- If Qt/VMS behavior changes, keep requested, accepted, sent audit, and feedback
-  as separate states.
+- If Qt/VMS behavior changes, keep requested, host write, accepted, sent audit,
+  and feedback as separate states.
+- VSM Qt source lives under `qt/`; build and test Qt work from that directory.
