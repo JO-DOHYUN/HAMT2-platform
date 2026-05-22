@@ -32,6 +32,7 @@ CTestTestfile.cmake
 
 *.elf
 *.hex
+!qt/tests/fixtures/*.hex
 *.map
 *.bin
 *.exe
