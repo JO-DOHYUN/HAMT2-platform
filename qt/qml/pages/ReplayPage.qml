@@ -108,8 +108,8 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 5
-                    Button { text: "BIN"; font.pixelSize: Math.round(10.8 * uiScale); onClicked: openReplay() }
-                    Button { text: "Typed"; font.pixelSize: Math.round(10.8 * uiScale); onClicked: openTypedReplay() }
+                    Button { text: "재생 열기"; font.pixelSize: Math.round(10.8 * uiScale); onClicked: openReplay() }
+                    Button { text: "Typed 폴더"; font.pixelSize: Math.round(10.8 * uiScale); onClicked: openTypedReplay() }
                     Label { text: "x" + appController.replaySpeed.toFixed(2); color: "#35506b"; font.pixelSize: Math.round(10.6 * uiScale) }
                     Button { text: "◀주"; font.pixelSize: Math.round(10.6 * uiScale); enabled: appController.replayLoaded && appController.replayTimingMarkerCount > 0; onClicked: appController.seekReplayIssue("timing", -1) }
                     Button { text: "주▶"; font.pixelSize: Math.round(10.6 * uiScale); enabled: appController.replayLoaded && appController.replayTimingMarkerCount > 0; onClicked: appController.seekReplayIssue("timing", 1) }
@@ -194,6 +194,13 @@ Item {
                     color: appController.replayPlaying ? "#15803d" : (appController.replayRebuilding ? "#0f4c81" : "#52606d")
                     elide: Label.ElideRight
                     font.pixelSize: Math.round(10.8 * uiScale)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: "legacy .bin은 파일로 열고, 새 typed 녹화는 capture.stream 파일 또는 *.typed 폴더로 엽니다."
+                    color: "#64748b"
+                    elide: Label.ElideRight
+                    font.pixelSize: Math.round(10.4 * uiScale)
                 }
             }
         }

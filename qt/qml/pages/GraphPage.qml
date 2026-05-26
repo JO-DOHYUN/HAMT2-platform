@@ -11,6 +11,7 @@ Item {
     property string signalAnchorKey: ""
     property bool restoringSignalListPosition: false
     property bool pendingSignalListRestore: false
+    property bool signalRestoreScheduled: false
 
     function kindFromLevel(level) {
         if (level === "ERR") return "bad"
@@ -58,17 +59,31 @@ Item {
     Connections {
         target: appController
         function restoreSignalListPosition() {
+            if (signalRestoreScheduled)
+                return
             const keepY = savedSignalScrollY
+            const keepKey = signalAnchorKey
+            signalRestoreScheduled = true
             restoringSignalListPosition = true
             pendingSignalListRestore = true
             Qt.callLater(function() {
                 signalList.forceLayout()
+                const keepIndex = signalIndexForKey(keepKey)
+                if (keepIndex >= 0)
+                    signalList.positionViewAtIndex(keepIndex, ListView.Contain)
                 signalList.contentY = clampSignalListY(keepY)
                 Qt.callLater(function() {
                     signalList.forceLayout()
+                    if (keepIndex >= 0)
+                        signalList.positionViewAtIndex(keepIndex, ListView.Contain)
                     signalList.contentY = clampSignalListY(keepY)
-                    pendingSignalListRestore = false
-                    restoringSignalListPosition = false
+                    Qt.callLater(function() {
+                        signalList.forceLayout()
+                        signalList.contentY = clampSignalListY(keepY)
+                        pendingSignalListRestore = false
+                        restoringSignalListPosition = false
+                        signalRestoreScheduled = false
+                    })
                 })
             })
         }
@@ -230,6 +245,14 @@ Item {
                                         rememberSignalListPosition(entry.key)
                                         appController.toggleGraphSignal(entry.key)
                                     }
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: Math.round(10 * uiScale)
+                                    Layout.preferredHeight: Math.round(18 * uiScale)
+                                    radius: Math.round(3 * uiScale)
+                                    color: entry.color || "#94a3b8"
+                                    opacity: entry.selected ? 1.0 : 0.55
                                 }
 
                                 Item {

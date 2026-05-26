@@ -78,6 +78,7 @@ private slots:
             QStringLiteral("alarm"),
             QStringLiteral("settings"),
             QStringLiteral("control"),
+            QStringLiteral("board"),
         };
 
         for (int scaleIndex = 0; scaleIndex < 3; ++scaleIndex) {
@@ -94,7 +95,7 @@ private slots:
 
         QVERIFY(root->setProperty("workspaceMode", true));
         QTest::qWait(80);
-        for (const QString& key : {QStringLiteral("live"), QStringLiteral("graph_overview"), QStringLiteral("control")}) {
+        for (const QString& key : {QStringLiteral("live"), QStringLiteral("graph_overview"), QStringLiteral("control"), QStringLiteral("board")}) {
             const QVariant keyArg(key);
             QVERIFY(QMetaObject::invokeMethod(root, "openPanelByKey", Q_ARG(QVariant, keyArg)));
             QTest::qWait(80);

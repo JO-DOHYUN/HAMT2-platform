@@ -104,6 +104,7 @@ qt_add_qml_module(can_monitor_qml_reboot
         qml/pages/GraphOverviewPage.qml
         qml/pages/AlarmPage.qml
         qml/pages/SettingsPage.qml
+        qml/pages/BoardHealthPage.qml
         qml/pages/ControlPage.qml
         qml/components/ColumnHeaderCell.qml
         qml/components/StatusBadge.qml

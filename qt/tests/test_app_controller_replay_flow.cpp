@@ -265,10 +265,15 @@ private slots:
         QTRY_VERIFY(controller.modelActive());
 
         QStringList rawKeys;
+        QHash<QString, QString> catalogColors;
         for (const QVariant& item : controller.graphCatalog()) {
             const QVariantMap row = item.toMap();
             if (row.value(QStringLiteral("mode")).toString() != QStringLiteral("raw")) continue;
-            rawKeys << row.value(QStringLiteral("key")).toString();
+            const QString key = row.value(QStringLiteral("key")).toString();
+            const QString color = row.value(QStringLiteral("color")).toString();
+            QVERIFY2(!color.isEmpty(), "graph catalog rows must expose stable signal colors");
+            rawKeys << key;
+            catalogColors.insert(key, color);
             if (rawKeys.size() >= 2) break;
         }
         QVERIFY2(rawKeys.size() >= 2, "fixture must expose at least two raw graph signals");
@@ -290,6 +295,7 @@ private slots:
             }
         }
         QVERIFY(!keepColor.isEmpty());
+        QCOMPARE(catalogColors.value(keepKey), keepColor);
 
         controller.setGraphSelectedKeys(QStringList{keepKey});
         QVERIFY(!controller.graphOverviewBuilding());

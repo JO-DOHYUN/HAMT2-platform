@@ -1581,6 +1581,7 @@ AppController::AppController(QObject* parent) : QObject(parent) {
     m_timingModel.setRoles({QStringLiteral("key"), QStringLiteral("idText"), QStringLiteral("name"), QStringLiteral("severity"), QStringLiteral("severityColor"), QStringLiteral("expectedMsText"), QStringLiteral("lastGapMsText"), QStringLiteral("ageMsText"), QStringLiteral("source"), QStringLiteral("reason"), QStringLiteral("metricText"), QStringLiteral("gaugePct"), QStringLiteral("eventCount"), QStringLiteral("history")});
     m_valueModel.setRoles({QStringLiteral("key"), QStringLiteral("idText"), QStringLiteral("name"), QStringLiteral("severity"), QStringLiteral("severityColor"), QStringLiteral("source"), QStringLiteral("bus"), QStringLiteral("dataHex"), QStringLiteral("gapText"), QStringLiteral("ageText"), QStringLiteral("reason"), QStringLiteral("previewText"), QStringLiteral("summaryText"), QStringLiteral("summaryRich"), QStringLiteral("valueMetricText"), QStringLiteral("valueGaugePct")});
     m_alarmModel.setRoles({QStringLiteral("key"), QStringLiteral("timeText"), QStringLiteral("severity"), QStringLiteral("severityColor"), QStringLiteral("idText"), QStringLiteral("name"), QStringLiteral("source"), QStringLiteral("message"), QStringLiteral("active"), QStringLiteral("count"), QStringLiteral("metricText"), QStringLiteral("gaugePct"), QStringLiteral("category"), QStringLiteral("categoryLabel"), QStringLiteral("history")});
+    m_boardEvidenceModel.setRoles({QStringLiteral("key"), QStringLiteral("label"), QStringLiteral("value"), QStringLiteral("level"), QStringLiteral("note")});
     m_controlEvidenceModel.setRoles({QStringLiteral("key"), QStringLiteral("timeText"), QStringLiteral("stage"), QStringLiteral("level"), QStringLiteral("summary"), QStringLiteral("detail"), QStringLiteral("commandId"), QStringLiteral("canId"), QStringLiteral("bus")});
     seedBusRoleResolver();
     loadModelFile(kBundledModelPath);
@@ -1620,6 +1621,7 @@ AppController::AppController(QObject* parent) : QObject(parent) {
             refreshControlStatus(QStringLiteral("Control disarmed: %1").arg(m_boardConnectionState.reason()));
         }
         if (boardAliveChanged || controlCapableChanged) {
+            refreshBoardEvidenceRows(true);
             emit typedEvidenceChanged();
             emit controlStateChanged();
             requestDerivedSummaryRefresh(false);
@@ -1688,6 +1690,7 @@ AppController::AppController(QObject* parent) : QObject(parent) {
             }
         }
         emit connectedChanged();
+        refreshBoardEvidenceRows(true);
         emit typedEvidenceChanged();
         emit controlStateChanged();
         requestLiveStatsRefresh(true);
@@ -1945,6 +1948,7 @@ AppController::AppController(QObject* parent) : QObject(parent) {
             || (qint64(nowWallMs) - m_lastTypedEvidenceNotifyWallMs) >= kTypedEvidenceUiMinIntervalMs;
         if (boardAliveChanged || controlCapableChanged || typedUiDue) {
             m_lastTypedEvidenceNotifyWallMs = qint64(nowWallMs);
+            refreshBoardEvidenceRows(boardAliveChanged || controlCapableChanged);
             emit typedEvidenceChanged();
         }
         if (boardAliveChanged || controlCapableChanged) emit controlStateChanged();
@@ -1962,6 +1966,7 @@ AppController::AppController(QObject* parent) : QObject(parent) {
         m_typedLengthFailures = lengthFailures;
         m_typedVersionWarnings = versionWarnings;
         m_typedSeqGaps = seqGaps;
+        refreshBoardEvidenceRows(false);
         emit typedEvidenceChanged();
         requestDerivedSummaryRefresh(false);
     });
@@ -2012,6 +2017,19 @@ AppController::AppController(QObject* parent) : QObject(parent) {
         } else {
             emit controlStateChanged();
         }
+    });
+    connect(m_worker, &SerialWorker::hostTxQueueChanged, this, [this](quint64 queuedFrames,
+                                                                       quint64 queuedBytes,
+                                                                       quint64 enqueuedFrames,
+                                                                       quint64 writtenFrames,
+                                                                       quint64 droppedFrames) {
+        m_hostTxQueuedFrames = queuedFrames;
+        m_hostTxQueuedBytes = queuedBytes;
+        m_hostTxEnqueuedFrames = enqueuedFrames;
+        m_hostTxWrittenFrames = writtenFrames;
+        m_hostTxDroppedFrames = droppedFrames;
+        refreshBoardEvidenceRows(false);
+        emit controlStateChanged();
     });
     connect(&m_replay, &ReplayEngine::replayFrame, this, [this](const FrameRecord& fr) {
         if (m_replayDisplayedUs > 0 && fr.tExtUs < m_replayDisplayedUs) {
@@ -3689,8 +3707,134 @@ QString AppController::controlEvidenceStatsSummary() const {
         .arg(m_controlFeedbackObservedCount);
 }
 
+void AppController::refreshBoardEvidenceRows(bool force) {
+    const qint64 nowWallMs = QDateTime::currentMSecsSinceEpoch();
+    if (!force && m_lastBoardEvidenceRefreshWallMs > 0 && nowWallMs - m_lastBoardEvidenceRefreshWallMs < 160) {
+        return;
+    }
+    m_lastBoardEvidenceRefreshWallMs = nowWallMs;
+
+    const auto state = m_boardConnectionState.snapshot();
+    QVector<QVariantMap> rows;
+    rows.reserve(12);
+
+    const auto addRow = [&rows](const QString& key,
+                                const QString& label,
+                                const QString& value,
+                                const QString& level,
+                                const QString& note = QString()) {
+        QVariantMap row;
+        row.insert(QStringLiteral("key"), key);
+        row.insert(QStringLiteral("label"), label);
+        row.insert(QStringLiteral("value"), value);
+        row.insert(QStringLiteral("level"), level);
+        row.insert(QStringLiteral("note"), note);
+        rows.push_back(row);
+    };
+
+    addRow(QStringLiteral("serial"),
+           QStringLiteral("시리얼"),
+           state.serialOpen ? QStringLiteral("OPEN") : QStringLiteral("CLOSED"),
+           state.serialOpen ? QStringLiteral("ok") : QStringLiteral("bad"),
+           state.serialOpen ? QStringLiteral("COM open은 물리 연결만 의미합니다.") : QStringLiteral("포트가 닫혀 있습니다."));
+
+    addRow(QStringLiteral("capability"),
+           QStringLiteral("CAPABILITY"),
+           state.capabilitySeen
+               ? QStringLiteral("profile %1.%2").arg(state.profileMajor).arg(state.profileMinor)
+               : QStringLiteral("대기"),
+           state.capabilitySeen ? (state.protocolCompatible ? QStringLiteral("ok") : QStringLiteral("bad")) : QStringLiteral("warn"),
+           state.capabilitySeen ? QStringLiteral("프로토콜/프로파일 호환성 확인 기준입니다.") : QStringLiteral("CAPABILITY 전까지 board alive가 아닙니다."));
+
+    addRow(QStringLiteral("health"),
+           QStringLiteral("BOARD_HEALTH"),
+           state.healthSeen
+               ? QStringLiteral("safety %1 · age %2ms · fault 0x%3")
+                     .arg(state.safetyState)
+                     .arg(state.healthAgeMs)
+                     .arg(state.faultFlags, 8, 16, QLatin1Char('0')).toUpper()
+               : QStringLiteral("대기"),
+           state.healthSeen ? (state.healthFresh && state.faultFlags == 0 ? QStringLiteral("ok") : QStringLiteral("warn")) : QStringLiteral("warn"),
+           state.healthFresh ? QStringLiteral("fresh") : state.reason);
+
+    addRow(QStringLiteral("alive"),
+           QStringLiteral("Board alive"),
+           state.boardAlive ? QStringLiteral("ALIVE") : QStringLiteral("NOT ALIVE"),
+           state.boardAlive ? QStringLiteral("ok") : QStringLiteral("warn"),
+           state.reason);
+
+    addRow(QStringLiteral("typed"),
+           QStringLiteral("Typed stream"),
+           QStringLiteral("records %1 · faults %2").arg(m_typedRecordCount).arg(typedTransportFaultCount()),
+           typedTransportFaultCount() > 0 ? QStringLiteral("bad") : (m_typedRecordCount > 0 ? QStringLiteral("ok") : QStringLiteral("info")),
+           typedEvidenceSummary());
+
+    QStringList rxBus;
+    for (auto it = m_typedCanRxByBus.cbegin(); it != m_typedCanRxByBus.cend(); ++it) {
+        if (it.value() > 0) rxBus << QStringLiteral("B%1:%2").arg(it.key()).arg(it.value());
+    }
+    QStringList txBus;
+    for (auto it = m_typedCanTxByBus.cbegin(); it != m_typedCanTxByBus.cend(); ++it) {
+        if (it.value() > 0) txBus << QStringLiteral("B%1:%2").arg(it.key()).arg(it.value());
+    }
+    addRow(QStringLiteral("can_rx"),
+           QStringLiteral("CAN RX evidence"),
+           QStringLiteral("%1").arg(m_typedTypeCounts.value(static_cast<quint8>(TypedRecordType::CanRxRaw))),
+           m_typedTypeCounts.value(static_cast<quint8>(TypedRecordType::CanRxRaw)) > 0 ? QStringLiteral("ok") : QStringLiteral("info"),
+           rxBus.isEmpty() ? QStringLiteral("bus별 RX 없음") : rxBus.join(QStringLiteral(" · ")));
+    addRow(QStringLiteral("can_tx"),
+           QStringLiteral("CAN_TX_RAW audit"),
+           QStringLiteral("%1").arg(m_typedTypeCounts.value(static_cast<quint8>(TypedRecordType::CanTxRaw))),
+           m_typedTypeCounts.value(static_cast<quint8>(TypedRecordType::CanTxRaw)) > 0 ? QStringLiteral("ok") : QStringLiteral("info"),
+           txBus.isEmpty() ? QStringLiteral("실제 CAN 송신 audit 없음") : txBus.join(QStringLiteral(" · ")));
+
+    addRow(QStringLiteral("rx_parity"),
+           QStringLiteral("RX parity"),
+           m_typedRxHealthParityAnchored
+               ? QStringLiteral("board %1 · stream %2 · miss %3")
+                     .arg(m_typedRxHealthBoardDelta)
+                     .arg(m_typedRxHealthStreamDelta)
+                     .arg(m_typedRxHealthMissing)
+               : QStringLiteral("대기"),
+           (m_typedRxHealthParityAnchored && m_typedRxHealthMissing > 0) ? QStringLiteral("bad") : (m_typedRxHealthParityAnchored ? QStringLiteral("ok") : QStringLiteral("info")),
+           QStringLiteral("BOARD_HEALTH의 RX total과 VSM typed CAN_RX 수신량 비교"));
+
+    addRow(QStringLiteral("bus_role"),
+           QStringLiteral("Control bus role"),
+           controlBusResolutionSummary(),
+           controlTargetBusAllowed() ? QStringLiteral("ok") : QStringLiteral("warn"),
+           m_controlBusSummary);
+
+    addRow(QStringLiteral("control_gate"),
+           QStringLiteral("Control gate"),
+           controlEvidenceReady() ? QStringLiteral("READY") : QStringLiteral("BLOCKED"),
+           controlEvidenceReady() ? QStringLiteral("ok") : QStringLiteral("warn"),
+           controlEvidenceReady() ? QStringLiteral("제어 요청 가능. 실제 성공은 CAN_TX_RAW 기준입니다.") : controlEvidenceBlockReason());
+
+    addRow(QStringLiteral("host_tx_queue"),
+           QStringLiteral("Host TX queue"),
+           QStringLiteral("queued %1 frames/%2B · enq/wr/drop %3/%4/%5")
+               .arg(m_hostTxQueuedFrames)
+               .arg(m_hostTxQueuedBytes)
+               .arg(m_hostTxEnqueuedFrames)
+               .arg(m_hostTxWrittenFrames)
+               .arg(m_hostTxDroppedFrames),
+           m_hostTxDroppedFrames > 0 ? QStringLiteral("bad") : (m_hostTxQueuedFrames > 0 ? QStringLiteral("warn") : QStringLiteral("ok")),
+           QStringLiteral("VSM downlink queue 상태. CAN 성공 판정은 아닙니다."));
+
+    addRow(QStringLiteral("control_evidence"),
+           QStringLiteral("Control evidence"),
+           controlEvidenceStatsSummary(),
+           m_controlAckRejectedCount > 0 || m_controlTxAuditUnmatchedCount > 0 ? QStringLiteral("warn") : QStringLiteral("info"),
+           QStringLiteral("Qt write, CONTROL_ACK, CAN_TX_RAW, feedback은 서로 다른 evidence입니다."));
+
+    m_boardEvidenceRows = rows;
+    m_boardEvidenceModel.setRowsRelaxed(m_boardEvidenceRows, true);
+}
+
 void AppController::refreshControlStatus(const QString& status) {
     if (!status.isEmpty()) m_controlStatusText = status;
+    refreshBoardEvidenceRows(false);
     emit controlStateChanged();
 }
 
@@ -4581,6 +4725,7 @@ void AppController::requestLiveStatsRefresh(bool immediate) {
     if (immediate) {
         m_liveStatsDirty = false;
         if (m_liveStatsTimer.isActive()) m_liveStatsTimer.stop();
+        refreshBoardEvidenceRows(true);
         emit liveStatsChanged();
         return;
     }
@@ -4596,6 +4741,7 @@ void AppController::requestLiveStatsRefresh(bool immediate) {
 void AppController::flushLiveStatsRefresh() {
     if (!m_liveStatsDirty) return;
     m_liveStatsDirty = false;
+    refreshBoardEvidenceRows(false);
     emit liveStatsChanged();
 }
 
@@ -5514,6 +5660,7 @@ void AppController::rebuildGraphCatalog() {
         row.insert(QStringLiteral("unit"), desc.unit);
         row.insert(QStringLiteral("group"), desc.group);
         row.insert(QStringLiteral("mode"), desc.mode);
+        row.insert(QStringLiteral("color"), graphColorForKey(desc.key));
         row.insert(QStringLiteral("selected"), m_graphSelectedKeys.contains(desc.key));
         m_graphCatalogCache.push_back(row);
     }
@@ -6867,6 +7014,11 @@ void AppController::resetTypedEvidenceState() {
     m_controlHostFrameQueuedCount = 0;
     m_controlHostWriteOkCount = 0;
     m_controlHostWriteFailCount = 0;
+    m_hostTxQueuedFrames = 0;
+    m_hostTxQueuedBytes = 0;
+    m_hostTxEnqueuedFrames = 0;
+    m_hostTxWrittenFrames = 0;
+    m_hostTxDroppedFrames = 0;
     m_controlAckAcceptedCount = 0;
     m_controlAckRejectedCount = 0;
     m_controlTxAuditMatchedCount = 0;
@@ -6878,6 +7030,7 @@ void AppController::resetTypedEvidenceState() {
     m_controlFeedbackLastWallMsByCanId.clear();
     m_controlLastBurstWallMs = 0;
     m_controlEvidenceModel.clear();
+    refreshBoardEvidenceRows(true);
 }
 
 void AppController::stopLog() {

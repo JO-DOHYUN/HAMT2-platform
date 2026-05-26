@@ -77,6 +77,27 @@ private slots:
         QVERIFY(stats.contains(QStringLiteral("TX audit 대기/매칭/미매칭 0/0/0")));
     }
 
+    void boardEvidenceModelExposesReleaseGateRows() {
+        AppController controller;
+        auto* model = controller.boardEvidenceModel();
+        QVERIFY(model != nullptr);
+        QVERIFY2(model->count() >= 10, qPrintable(QStringLiteral("boardEvidence row count %1").arg(model->count())));
+
+        const int serialRow = model->findIndex(QStringLiteral("key"), QStringLiteral("serial"));
+        const int aliveRow = model->findIndex(QStringLiteral("key"), QStringLiteral("alive"));
+        const int controlGateRow = model->findIndex(QStringLiteral("key"), QStringLiteral("control_gate"));
+        const int txAuditRow = model->findIndex(QStringLiteral("key"), QStringLiteral("can_tx"));
+        QVERIFY(serialRow >= 0);
+        QVERIFY(aliveRow >= 0);
+        QVERIFY(controlGateRow >= 0);
+        QVERIFY(txAuditRow >= 0);
+
+        QCOMPARE(model->get(serialRow).value(QStringLiteral("value")).toString(), QStringLiteral("CLOSED"));
+        QCOMPARE(model->get(aliveRow).value(QStringLiteral("value")).toString(), QStringLiteral("NOT ALIVE"));
+        QCOMPARE(model->get(controlGateRow).value(QStringLiteral("value")).toString(), QStringLiteral("BLOCKED"));
+        QVERIFY(model->get(txAuditRow).value(QStringLiteral("note")).toString().contains(QStringLiteral("audit")));
+    }
+
     void finalizePendingLogSaveCopiesArtifactsAndClearsPendingState() {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());

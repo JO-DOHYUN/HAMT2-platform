@@ -331,7 +331,7 @@ Item {
                                     anchors.fill: parent
                                     anchors.margins: Math.round(9 * root.uiScale)
                                     spacing: 3
-                                    Label { text: "CONTROL_ACK"; font.bold: true; color: root.panelText(root.ackKind()) }
+                                    Label { text: "CONTROL_ACK (성공 아님)"; font.bold: true; color: root.panelText(root.ackKind()) }
                                     Label {
                                         Layout.fillWidth: true
                                         text: appController.controlLastAckSummary
@@ -355,7 +355,7 @@ Item {
                                     anchors.fill: parent
                                     anchors.margins: Math.round(9 * root.uiScale)
                                     spacing: 3
-                                    Label { text: "실제 TX audit"; font.bold: true; color: root.panelText(root.auditKind()) }
+                                    Label { text: "실제 송신 CAN_TX_RAW"; font.bold: true; color: root.panelText(root.auditKind()) }
                                     Label {
                                         Layout.fillWidth: true
                                         text: appController.controlLastAuditSummary

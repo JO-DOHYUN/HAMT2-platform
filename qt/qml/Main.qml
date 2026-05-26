@@ -56,7 +56,7 @@ ApplicationWindow {
     }
 
     function openPanelByKey(key) {
-        const map = { overview: 0, live: 1, replay: 2, timing: 3, value: 4, graph: 5, graph_overview: 6, alarm: 7, settings: 8, control: 9 }
+        const map = { overview: 0, live: 1, replay: 2, timing: 3, value: 4, graph: 5, graph_overview: 6, alarm: 7, settings: 8, control: 9, board: 10 }
         const index = map[key] !== undefined ? map[key] : 0
         tabs.currentIndex = index
         if (root.workspaceMode)
@@ -113,6 +113,7 @@ ApplicationWindow {
         if (key === "graph_overview") return graphOverviewPageComponent
         if (key === "alarm") return alarmPageComponent
         if (key === "control") return controlPageComponent
+        if (key === "board") return boardHealthPageComponent
         return settingsPageComponent
     }
 
@@ -126,6 +127,7 @@ ApplicationWindow {
         if (key === "graph_overview") return 1180
         if (key === "alarm") return 1100
         if (key === "control") return 1120
+        if (key === "board") return 1120
         return 1020
     }
 
@@ -396,14 +398,14 @@ ApplicationWindow {
 
     FileDialog {
         id: replayDialog
-        title: "Replay file select"
+        title: "재생 파일 선택 (.bin 또는 capture.stream)"
         nameFilters: ["Replay files (*.bin capture.stream)", "Legacy BIN (*.bin)", "Typed stream (capture.stream)", "All files (*)"]
         onAccepted: appController.loadReplay(selectedFile.toString())
     }
 
     FolderDialog {
         id: typedReplayFolderDialog
-        title: "Typed replay session folder"
+        title: "Typed capture 폴더 선택"
         onAccepted: appController.loadReplay(selectedFolder.toString())
     }
 
@@ -505,6 +507,7 @@ ApplicationWindow {
         ListElement { key: "alarm"; title: "경보"; opened: false }
         ListElement { key: "settings"; title: "설정"; opened: false }
         ListElement { key: "control"; title: "제어"; opened: false }
+        ListElement { key: "board"; title: "보드"; opened: false }
     }
 
     Component {
@@ -550,6 +553,7 @@ ApplicationWindow {
     Component { id: graphOverviewPageComponent; Pages.GraphOverviewPage { uiScale: root.uiScale } }
     Component { id: alarmPageComponent; Pages.AlarmPage { uiScale: root.uiScale } }
     Component { id: controlPageComponent; Pages.ControlPage { uiScale: root.uiScale; monoFontFamily: root.monoFontFamily } }
+    Component { id: boardHealthPageComponent; Pages.BoardHealthPage { uiScale: root.uiScale; monoFontFamily: root.monoFontFamily } }
     Component {
         id: settingsPageComponent
         Pages.SettingsPage {
@@ -590,7 +594,8 @@ ApplicationWindow {
                         TabButton { text: "전체그래프"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(6) }
                         TabButton { text: "경보"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(7) }
                         TabButton { text: "설정"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(8) }
-                        TabButton { text: "Control"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(9) }
+                        TabButton { text: "제어"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(9) }
+                        TabButton { text: "보드"; font.pixelSize: Math.round(11.2 * root.uiScale); onClicked: if (root.workspaceMode) root.enablePanel(10) }
                     }
                     Switch {
                         id: workspaceSwitch
@@ -625,6 +630,7 @@ ApplicationWindow {
                     Button { text: "개요+라이브+경보"; font.pixelSize: Math.round(12 * root.uiScale); onClicked: root.setWorkspacePreset(0, 1, 7) }
                     Button { text: "라이브+주기+값"; font.pixelSize: Math.round(12 * root.uiScale); onClicked: root.setWorkspacePreset(1, 3, 4) }
                     Button { text: "라이브+값+그래프"; font.pixelSize: Math.round(12 * root.uiScale); onClicked: root.setWorkspacePreset(1, 4, 5) }
+                    Button { text: "보드+제어"; font.pixelSize: Math.round(12 * root.uiScale); onClicked: root.setWorkspacePreset(10, 9, 1) }
                     Button { text: "현재 탭 열기"; font.pixelSize: Math.round(12 * root.uiScale); onClicked: root.enablePanel(tabs.currentIndex) }
                 }
             }
@@ -675,12 +681,12 @@ ApplicationWindow {
                         spacing: Math.round(5 * root.uiScale)
 
                         Button {
-                            text: "BIN"
+                            text: "재생 열기"
                             font.pixelSize: Math.round(10.8 * root.uiScale)
                             onClicked: replayDialog.open()
                         }
                         Button {
-                            text: "Typed"
+                            text: "Typed 폴더"
                             font.pixelSize: Math.round(10.8 * root.uiScale)
                             onClicked: typedReplayFolderDialog.open()
                         }
@@ -803,6 +809,7 @@ ApplicationWindow {
             Components.PageViewport { active: !root.workspaceMode && tabs.currentIndex === 7; pageComponent: alarmPageComponent; minPageWidth: root.minimumPageWidthForKey("alarm"); uiScale: root.uiScale }
             Components.PageViewport { active: !root.workspaceMode && tabs.currentIndex === 8; pageComponent: settingsPageComponent; minPageWidth: root.minimumPageWidthForKey("settings"); uiScale: root.uiScale }
             Components.PageViewport { active: !root.workspaceMode && tabs.currentIndex === 9; pageComponent: controlPageComponent; minPageWidth: root.minimumPageWidthForKey("control"); uiScale: root.uiScale }
+            Components.PageViewport { active: !root.workspaceMode && tabs.currentIndex === 10; pageComponent: boardHealthPageComponent; minPageWidth: root.minimumPageWidthForKey("board"); uiScale: root.uiScale }
         }
 
         Frame {

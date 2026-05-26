@@ -60,6 +60,7 @@ class AppController : public QObject {
     Q_PROPERTY(qulonglong typedTransportFaultCount READ typedTransportFaultCount NOTIFY typedEvidenceChanged)
     Q_PROPERTY(bool boardAlive READ boardAlive NOTIFY typedEvidenceChanged)
     Q_PROPERTY(QString boardConnectionSummary READ boardConnectionSummary NOTIFY typedEvidenceChanged)
+    Q_PROPERTY(StableMapListModel* boardEvidenceModel READ boardEvidenceModel CONSTANT)
     Q_PROPERTY(bool controlArmed READ controlArmed WRITE setControlArmed NOTIFY controlStateChanged)
     Q_PROPERTY(bool controlTestRunning READ controlTestRunning NOTIFY controlStateChanged)
     Q_PROPERTY(int controlTargetBus READ controlTargetBus WRITE setControlTargetBus NOTIFY controlStateChanged)
@@ -270,6 +271,7 @@ public:
     qulonglong typedTransportFaultCount() const;
     bool boardAlive() const { return m_boardConnectionState.boardAlive(); }
     QString boardConnectionSummary() const;
+    StableMapListModel* boardEvidenceModel() { refreshBoardEvidenceRows(true); return &m_boardEvidenceModel; }
     bool controlArmed() const { return m_controlArmed; }
     bool controlTestRunning() const { return m_controlTestRunning; }
     int controlTargetBus() const { return m_controlTargetBus; }
@@ -808,6 +810,7 @@ private:
     void stopControlKeepalive();
     void appendControlEvidenceEvent(const QString& stage, const QString& level, const QString& summary, const QString& detail = QString(), quint32 commandId = 0, quint32 canId = 0, quint8 bus = 0);
     void refreshControlStatus(const QString& status);
+    void refreshBoardEvidenceRows(bool force = false);
     void processControlPatternStep();
     void flushQueuedLiveViewBatch();
     void noteBusAlarmEvent(const QString& source);
@@ -1038,7 +1041,9 @@ private:
     StableMapListModel m_timingModel;
     StableMapListModel m_valueModel;
     StableMapListModel m_alarmModel;
+    StableMapListModel m_boardEvidenceModel;
     StableMapListModel m_controlEvidenceModel;
+    QVector<QVariantMap> m_boardEvidenceRows;
     QVector<QVariantMap> m_controlEvidenceRows;
     QMap<quint32, QVector<quint32>> m_controlAcceptedAckByCanId;
     QMap<quint32, qint64> m_controlFeedbackLastWallMsByCanId;
@@ -1162,6 +1167,7 @@ private:
     QString m_typedLastCanRxSummary;
     QString m_typedLastCanTxSummary;
     qint64 m_lastTypedEvidenceNotifyWallMs = 0;
+    qint64 m_lastBoardEvidenceRefreshWallMs = 0;
     quint64 m_lastTypedHealthMonoUs = 0;
     quint32 m_lastTypedHealthCanRxTotal = 0;
     quint32 m_lastTypedHealthSerialTxTotal = 0;
@@ -1202,6 +1208,11 @@ private:
     quint64 m_controlHostFrameQueuedCount = 0;
     quint64 m_controlHostWriteOkCount = 0;
     quint64 m_controlHostWriteFailCount = 0;
+    quint64 m_hostTxQueuedFrames = 0;
+    quint64 m_hostTxQueuedBytes = 0;
+    quint64 m_hostTxEnqueuedFrames = 0;
+    quint64 m_hostTxWrittenFrames = 0;
+    quint64 m_hostTxDroppedFrames = 0;
     quint64 m_controlAckAcceptedCount = 0;
     quint64 m_controlAckRejectedCount = 0;
     quint64 m_controlTxAuditMatchedCount = 0;
