@@ -10,6 +10,7 @@ Item {
     property real savedSignalScrollY: 0
     property string signalAnchorKey: ""
     property bool restoringSignalListPosition: false
+    property bool pendingSignalListRestore: false
 
     function kindFromLevel(level) {
         if (level === "ERR") return "bad"
@@ -42,25 +43,33 @@ Item {
         return -1
     }
 
+    function clampSignalListY(y) {
+        return Math.max(0, Math.min(y, Math.max(0, signalList.contentHeight - signalList.height)))
+    }
+
+    function rememberSignalListPosition(key) {
+        savedSignalScrollY = signalList.contentY
+        signalAnchorKey = key
+        pendingSignalListRestore = true
+    }
+
     Component.onCompleted: Qt.callLater(syncPresetIndex)
 
     Connections {
         target: appController
         function restoreSignalListPosition() {
+            const keepY = savedSignalScrollY
             restoringSignalListPosition = true
+            pendingSignalListRestore = true
             Qt.callLater(function() {
-                let restored = false
-                if (signalAnchorKey !== "") {
-                    const idx = signalIndexForKey(signalAnchorKey)
-                    if (idx >= 0) {
-                        signalList.positionViewAtIndex(idx, ListView.Contain)
-                        restored = true
-                    }
-                }
-                if (!restored) {
-                    signalList.contentY = Math.max(0, Math.min(savedSignalScrollY, Math.max(0, signalList.contentHeight - signalList.height)))
-                }
-                restoringSignalListPosition = false
+                signalList.forceLayout()
+                signalList.contentY = clampSignalListY(keepY)
+                Qt.callLater(function() {
+                    signalList.forceLayout()
+                    signalList.contentY = clampSignalListY(keepY)
+                    pendingSignalListRestore = false
+                    restoringSignalListPosition = false
+                })
             })
         }
         function onGraphCatalogChanged() { syncPresetIndex(); restoreSignalListPosition() }
@@ -197,7 +206,7 @@ Item {
                         cacheBuffer: 220
                         boundsBehavior: Flickable.StopAtBounds
                         onContentYChanged: {
-                            if (!restoringSignalListPosition)
+                            if (!restoringSignalListPosition && !pendingSignalListRestore)
                                 savedSignalScrollY = contentY
                         }
                         model: appController.graphCatalog
@@ -218,8 +227,7 @@ Item {
                                 CheckBox {
                                     checked: entry.selected
                                     onClicked: {
-                                        savedSignalScrollY = signalList.contentY
-                                        signalAnchorKey = entry.key
+                                        rememberSignalListPosition(entry.key)
                                         appController.toggleGraphSignal(entry.key)
                                     }
                                 }
@@ -230,8 +238,7 @@ Item {
 
                                     TapHandler {
                                         onTapped: {
-                                            savedSignalScrollY = signalList.contentY
-                                            signalAnchorKey = entry.key
+                                            rememberSignalListPosition(entry.key)
                                             appController.toggleGraphSignal(entry.key)
                                         }
                                     }

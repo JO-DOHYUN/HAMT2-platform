@@ -642,12 +642,23 @@ QString graphDerivedSignalKey(const QString& baseKey, const QString& mode) {
     return baseKey + QStringLiteral("|") + mode;
 }
 
-QString graphColorForIndex(int index) {
+const QStringList& graphColorPalette() {
     static const QStringList palette = {
         QStringLiteral("#2563eb"), QStringLiteral("#d97706"), QStringLiteral("#16a34a"), QStringLiteral("#dc2626"),
         QStringLiteral("#7c3aed"), QStringLiteral("#0891b2"), QStringLiteral("#db2777"), QStringLiteral("#475569")
     };
-    return palette.at(index % palette.size());
+    return palette;
+}
+
+QString graphColorForKey(const QString& key) {
+    const QByteArray bytes = key.toUtf8();
+    quint32 hash = 2166136261u;
+    for (const char byte : bytes) {
+        hash ^= quint8(byte);
+        hash *= 16777619u;
+    }
+    const auto& palette = graphColorPalette();
+    return palette.at(int(hash % quint32(palette.size())));
 }
 
 int graphRenderPointLimit(int windowMs) {
@@ -5876,7 +5887,6 @@ void AppController::flushGraphRefresh() {
     const int exactRawLimit = graphExactRawPointLimit(m_graphWindowMs);
     const quint64 bucketUs = std::max<quint64>(1000ULL, std::max<quint64>(1ULL, windowUs / quint64(std::max(1, renderLimit))));
 
-    int colorIndex = 0;
     for (const QString& key : m_graphSelectedKeys) {
         const auto descIt = m_graphSignals.constFind(key);
         if (descIt == m_graphSignals.cend()) continue;
@@ -5993,7 +6003,7 @@ void AppController::flushGraphRefresh() {
         row.insert(QStringLiteral("key"), key);
         row.insert(QStringLiteral("label"), desc.label);
         row.insert(QStringLiteral("unit"), desc.unit);
-        row.insert(QStringLiteral("color"), graphColorForIndex(colorIndex++));
+        row.insert(QStringLiteral("color"), graphColorForKey(key));
         row.insert(QStringLiteral("group"), desc.group);
         row.insert(QStringLiteral("mode"), desc.mode);
         row.insert(QStringLiteral("renderMode"), renderMode);
@@ -6331,7 +6341,6 @@ void AppController::refreshGraphOverviewSeries() {
     bool havePoint = false;
     QStringList unitSet;
     QVector<GraphSignalDescriptor> activeDescs;
-    int colorIndex = 0;
 
     for (const QString& key : selected) {
         const auto descIt = m_graphSignals.constFind(key);
@@ -6392,7 +6401,7 @@ void AppController::refreshGraphOverviewSeries() {
         row.insert(QStringLiteral("key"), key);
         row.insert(QStringLiteral("label"), desc.label);
         row.insert(QStringLiteral("unit"), desc.unit);
-        row.insert(QStringLiteral("color"), graphColorForIndex(colorIndex++));
+        row.insert(QStringLiteral("color"), graphColorForKey(key));
         row.insert(QStringLiteral("group"), desc.group);
         row.insert(QStringLiteral("mode"), desc.mode);
         row.insert(QStringLiteral("renderMode"), QStringLiteral("bucket"));
@@ -6495,7 +6504,6 @@ QVariantList AppController::buildGraphOverviewDetailSeries(double startMs, doubl
     double globalMax = std::numeric_limits<double>::lowest();
     bool havePoint = false;
     QVector<GraphSignalDescriptor> activeDescs;
-    int colorIndex = 0;
 
     for (const QString& key : selected) {
         const auto descIt = m_graphSignals.constFind(key);
@@ -6602,7 +6610,7 @@ QVariantList AppController::buildGraphOverviewDetailSeries(double startMs, doubl
         row.insert(QStringLiteral("key"), key);
         row.insert(QStringLiteral("label"), desc.label);
         row.insert(QStringLiteral("unit"), desc.unit);
-        row.insert(QStringLiteral("color"), graphColorForIndex(colorIndex++));
+        row.insert(QStringLiteral("color"), graphColorForKey(key));
         row.insert(QStringLiteral("group"), desc.group);
         row.insert(QStringLiteral("mode"), desc.mode);
         row.insert(QStringLiteral("renderMode"), renderMode);

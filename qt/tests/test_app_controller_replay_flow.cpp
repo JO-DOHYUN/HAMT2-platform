@@ -280,11 +280,24 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(controller.graphOverviewReady(), 5000);
         QCOMPARE(controller.graphOverviewSeries().size(), 2);
         QVERIFY(!controller.graphOverviewBuilding());
+        const QString keepKey = rawKeys.at(1);
+        QString keepColor;
+        for (const QVariant& item : controller.graphOverviewSeries()) {
+            const QVariantMap row = item.toMap();
+            if (row.value(QStringLiteral("key")).toString() == keepKey) {
+                keepColor = row.value(QStringLiteral("color")).toString();
+                break;
+            }
+        }
+        QVERIFY(!keepColor.isEmpty());
 
-        controller.setGraphSelectedKeys(QStringList{rawKeys.first()});
+        controller.setGraphSelectedKeys(QStringList{keepKey});
         QVERIFY(!controller.graphOverviewBuilding());
         QTRY_VERIFY_WITH_TIMEOUT(controller.graphOverviewReady(), 1000);
         QCOMPARE(controller.graphOverviewSeries().size(), 1);
+        const QVariantMap remaining = controller.graphOverviewSeries().front().toMap();
+        QCOMPARE(remaining.value(QStringLiteral("key")).toString(), keepKey);
+        QCOMPARE(remaining.value(QStringLiteral("color")).toString(), keepColor);
     }
 
     void typedReplaySessionLoadsCanRxFramesOnly() {
