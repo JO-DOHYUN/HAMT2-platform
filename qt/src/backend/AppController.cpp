@@ -5229,6 +5229,7 @@ void AppController::clearModel() {
     m_alarmCapableSignalIds.clear();
     rebuildGraphCatalog();
     clearGraphHistory();
+    clearGraphOverviewState();
     m_alarmModel.clear();
     auto resetStateMap = [](QHash<quint32, IdState>& states) {
         for (auto it = states.begin(); it != states.end(); ++it) {
@@ -5521,7 +5522,6 @@ void AppController::rebuildGraphCatalog() {
 
     emit graphCatalogChanged();
     emit graphSelectionChanged();
-    if (m_replayLoaded) restartGraphOverviewBuild(true);
 }
 
 void AppController::clearGraphHistory(const QString& source) {
@@ -6151,16 +6151,51 @@ void AppController::clearGraphOverviewState() {
     emit graphOverviewChanged();
 }
 
-void AppController::restartGraphOverviewBuild(bool clearSeries) {
-    m_graphOverviewBuildTimer.stop();
-
+QStringList AppController::normalizedGraphOverviewKeys(const QStringList& keys) const {
     QStringList selected;
-    for (const QString& key : m_graphSelectedKeys) {
+    for (const QString& key : keys) {
         if (!m_graphSignals.contains(key)) continue;
         if (selected.contains(key)) continue;
         selected << key;
         if (selected.size() >= 4) break;
     }
+    return selected;
+}
+
+bool AppController::graphOverviewCacheCoversSelection(const QStringList& selected, quint64 startUs, quint64 endUs) const {
+    if (selected.isEmpty() || m_graphOverviewBuildActive) return false;
+    if (m_replayOverviewGraphHistory.isEmpty()) return false;
+    if (m_graphOverviewBuiltStartUs != startUs || m_graphOverviewBuiltEndUs != endUs) return false;
+
+    for (const QString& key : selected) {
+        const auto it = m_graphSignals.constFind(key);
+        if (it == m_graphSignals.cend()) return false;
+        const QString historyKey = it.value().historyKey.isEmpty() ? key : it.value().historyKey;
+        const auto historyIt = m_replayOverviewGraphHistory.constFind(historyKey);
+        if (historyIt == m_replayOverviewGraphHistory.cend() || historyIt.value().isEmpty()) return false;
+    }
+    return true;
+}
+
+void AppController::reuseGraphOverviewCacheForSelection(const QStringList& selected, quint64 startUs, quint64 endUs) {
+    m_graphOverviewBuildTimer.stop();
+    m_graphOverviewBuildActive = false;
+    m_graphOverviewBuildProgress = 1.0;
+    m_graphOverviewBuildNextIndex = 0;
+    m_graphOverviewBuildSelectionKey.clear();
+    m_graphOverviewBuildSelectedKeys.clear();
+    m_graphOverviewBuildIds.clear();
+    m_graphOverviewBuiltStartUs = startUs;
+    m_graphOverviewBuiltEndUs = endUs;
+    m_graphOverviewBuiltSelectionKey = selected.join(QStringLiteral("|"));
+    m_graphOverviewBuildTextCache = QStringLiteral("전체 그래프 선택 변경 · 기존 캐시 재사용");
+    refreshGraphOverviewSeries();
+}
+
+void AppController::restartGraphOverviewBuild(bool clearSeries) {
+    m_graphOverviewBuildTimer.stop();
+
+    const QStringList selected = normalizedGraphOverviewKeys(m_graphSelectedKeys);
 
     const auto& frames = m_replay.frames();
     if (!m_replayLoaded || frames.empty() || !m_modelEnabled || m_graphSignals.isEmpty() || selected.isEmpty()) {
@@ -6171,6 +6206,10 @@ void AppController::restartGraphOverviewBuild(bool clearSeries) {
     const QString selectionKey = selected.join(QStringLiteral("|"));
     const quint64 startUs = frames.front().tExtUs;
     const quint64 endUs = frames.back().tExtUs;
+    if (!clearSeries && graphOverviewCacheCoversSelection(selected, startUs, endUs)) {
+        reuseGraphOverviewCacheForSelection(selected, startUs, endUs);
+        return;
+    }
     if (!clearSeries
         && !m_graphOverviewBuildActive
         && m_graphOverviewBuiltSelectionKey == selectionKey
@@ -6639,7 +6678,7 @@ void AppController::setGraphSelectedKeys(const QStringList& keys) {
     resetGraphDetailZoomLock();
     rebuildGraphCatalog();
     if (activeAnalysisSourceKey() == QStringLiteral("replay")) rebuildReplayGraphHistoryWindow();
-    restartGraphOverviewBuild(true);
+    restartGraphOverviewBuild(false);
     requestGraphRefresh(true);
 }
 
@@ -8089,6 +8128,7 @@ bool AppController::loadModelFile(const QString& path) {
     refreshValueRows();
     syncLiveBusHealthAlarms();
     refreshAlarmRows();
+    if (m_replayLoaded) restartGraphOverviewBuild(true);
     requestGraphRefresh(true);
     return pack.hasContent();
 }

@@ -127,10 +127,21 @@ QString writeModelFixture(const QString& rootPath) {
     signal.insert(QStringLiteral("alarm_severity"), QStringLiteral("ERR"));
     signal.insert(QStringLiteral("alarm_message"), QStringLiteral("Temperature too high"));
 
+    QJsonObject signal2 = signal;
+    signal2.insert(QStringLiteral("name"), QStringLiteral("Motor Current"));
+    signal2.insert(QStringLiteral("byte_index_1based"), 2);
+    signal2.insert(QStringLiteral("description"), QStringLiteral("fixture current"));
+    signal2.insert(QStringLiteral("unit"), QStringLiteral("A"));
+    signal2.insert(QStringLiteral("alarm_mode"), QStringLiteral("none"));
+    signal2.remove(QStringLiteral("warn_max"));
+    signal2.remove(QStringLiteral("err_max"));
+    signal2.remove(QStringLiteral("alarm_severity"));
+    signal2.remove(QStringLiteral("alarm_message"));
+
     QJsonObject message;
     message.insert(QStringLiteral("id"), QStringLiteral("0x321"));
     message.insert(QStringLiteral("name"), QStringLiteral("Replay Flow Frame"));
-    message.insert(QStringLiteral("signals"), QJsonArray{signal});
+    message.insert(QStringLiteral("signals"), QJsonArray{signal, signal2});
 
     root.insert(QStringLiteral("rules"), QJsonArray{rule});
     root.insert(QStringLiteral("messages"), QJsonArray{message});
@@ -232,6 +243,48 @@ private slots:
         QTRY_COMPARE(controller.selectedValueId(), QStringLiteral("0X321"));
         QVERIFY(controller.seekReplayId(QStringLiteral("0X321"), 1));
         QTRY_COMPARE(controller.valueFilterId(), QStringLiteral("0X321"));
+    }
+
+    void graphOverviewDeselectReusesFullRangeCache() {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QByteArray appDataPath = QDir::toNativeSeparators(tempDir.path()).toUtf8();
+        qputenv("APPDATA", appDataPath);
+        qputenv("LOCALAPPDATA", appDataPath);
+
+        const QString modelPath = writeModelFixture(tempDir.path());
+        const QString replayPath = writeReplayFixture(tempDir.path());
+        QVERIFY(!modelPath.isEmpty());
+        QVERIFY(!replayPath.isEmpty());
+
+        AppController controller;
+        controller.clearSavedSession();
+        controller.clearFrames();
+        controller.setRulesPath(modelPath);
+        QTRY_VERIFY(controller.modelActive());
+
+        QStringList rawKeys;
+        for (const QVariant& item : controller.graphCatalog()) {
+            const QVariantMap row = item.toMap();
+            if (row.value(QStringLiteral("mode")).toString() != QStringLiteral("raw")) continue;
+            rawKeys << row.value(QStringLiteral("key")).toString();
+            if (rawKeys.size() >= 2) break;
+        }
+        QVERIFY2(rawKeys.size() >= 2, "fixture must expose at least two raw graph signals");
+
+        controller.loadReplay(replayPath);
+        QTRY_VERIFY(controller.replayLoaded());
+
+        controller.setGraphSelectedKeys(rawKeys.mid(0, 2));
+        QTRY_VERIFY_WITH_TIMEOUT(controller.graphOverviewReady(), 5000);
+        QCOMPARE(controller.graphOverviewSeries().size(), 2);
+        QVERIFY(!controller.graphOverviewBuilding());
+
+        controller.setGraphSelectedKeys(QStringList{rawKeys.first()});
+        QVERIFY(!controller.graphOverviewBuilding());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.graphOverviewReady(), 1000);
+        QCOMPARE(controller.graphOverviewSeries().size(), 1);
     }
 
     void typedReplaySessionLoadsCanRxFramesOnly() {

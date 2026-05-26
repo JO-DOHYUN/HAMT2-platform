@@ -745,6 +745,9 @@ private:
     void trimGraphBucketCaches(const QString& source, const QString& historyKey, quint64 minUs);
     QVector<GraphBucketPoint> sliceGraphBucketCache(const QString& source, const QString& historyKey, quint64 startUs, quint64 endUs, quint64 bucketUs, int reserveCount);
     void clearGraphOverviewState();
+    QStringList normalizedGraphOverviewKeys(const QStringList& keys) const;
+    bool graphOverviewCacheCoversSelection(const QStringList& selected, quint64 startUs, quint64 endUs) const;
+    void reuseGraphOverviewCacheForSelection(const QStringList& selected, quint64 startUs, quint64 endUs);
     void restartGraphOverviewBuild(bool clearSeries = true);
     void processGraphOverviewBuildStep();
     void refreshGraphOverviewSeries();
