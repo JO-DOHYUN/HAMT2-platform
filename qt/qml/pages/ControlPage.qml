@@ -9,6 +9,7 @@ Item {
     property string monoFontFamily: "Monospace"
 
     focus: true
+
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_W) { appController.controlKeyboardCommand("w"); event.accepted = true }
         else if (event.key === Qt.Key_S) { appController.controlKeyboardCommand("s"); event.accepted = true }
@@ -17,14 +18,49 @@ Item {
         else if (event.key === Qt.Key_X || event.key === Qt.Key_Escape) { appController.controlSendNeutral(); event.accepted = true }
     }
 
-    function badgeKindForReady() {
+    function readyKind() {
         if (!appController.connected || !appController.boardAlive)
             return "warn"
         return "ok"
     }
 
     function ackKind() {
-        return appController.controlLastAckSummary.indexOf("REJECTED") >= 0 ? "bad" : "info"
+        const text = appController.controlLastAckSummary
+        if (text.indexOf("REJECTED") >= 0)
+            return "bad"
+        if (text.indexOf("ACCEPTED") >= 0)
+            return "warn"
+        return "info"
+    }
+
+    function auditKind() {
+        const text = appController.controlLastAuditSummary
+        if (text.indexOf("NO CAN_TX_RAW") >= 0)
+            return "bad"
+        if (text.indexOf("MATCH") >= 0 || text.indexOf("AUDIT") >= 0)
+            return "ok"
+        return "info"
+    }
+
+    function panelColor(kind) {
+        if (kind === "ok") return "#ecfdf3"
+        if (kind === "warn") return "#fff7ed"
+        if (kind === "bad" || kind === "error") return "#fff1f2"
+        return "#f8fafc"
+    }
+
+    function panelBorder(kind) {
+        if (kind === "ok") return "#bbf7d0"
+        if (kind === "warn") return "#fed7aa"
+        if (kind === "bad" || kind === "error") return "#fecdd3"
+        return "#dbe5f0"
+    }
+
+    function panelText(kind) {
+        if (kind === "ok") return "#166534"
+        if (kind === "warn") return "#9a3412"
+        if (kind === "bad" || kind === "error") return "#be123c"
+        return "#475569"
     }
 
     ScrollView {
@@ -62,7 +98,7 @@ Item {
                         }
                         Components.StatusBadge {
                             text: appController.boardAlive ? "보드 정상" : "보드 대기"
-                            kind: root.badgeKindForReady()
+                            kind: root.readyKind()
                             uiScale: root.uiScale
                             maxWidth: Math.round(120 * root.uiScale)
                         }
@@ -79,6 +115,13 @@ Item {
                         }
                     }
 
+                    Label {
+                        Layout.fillWidth: true
+                        text: "제어 성공 판정은 CONTROL_ACK가 아니라 matching CAN_TX_RAW audit 기준입니다. ACK는 보드가 요청을 접수/거부했다는 증거로만 표시합니다."
+                        wrapMode: Text.WordWrap
+                        color: "#334155"
+                        font.pixelSize: Math.round(12 * root.uiScale)
+                    }
                     Label {
                         Layout.fillWidth: true
                         text: appController.controlStatusSummary
@@ -118,7 +161,7 @@ Item {
                         }
                         Label {
                             Layout.fillWidth: true
-                            text: "W/S는 전후진 목표값, A/D는 조향 목표값을 2도씩 이동합니다. 실제 CAN 출력은 20ms마다 조향 1도 이하, rpm 250 이하로 제한됩니다."
+                            text: "W/S는 전후진 명령, A/D는 조향 목표를 조금씩 이동합니다. 실제 출력은 20ms 주기로 유지되고 조향/rpm은 내부 slew limiter로 완만하게 변합니다."
                             wrapMode: Text.WordWrap
                             color: "#64748b"
                             font.pixelSize: Math.round(11 * root.uiScale)
@@ -161,8 +204,8 @@ Item {
                                     onMoved: appController.setControlTargetSteeringDeg(value)
                                 }
                                 Label {
-                                    text: appController.controlTargetSteeringDeg.toFixed(1) + "°"
-                                    Layout.preferredWidth: Math.round(58 * root.uiScale)
+                                    text: appController.controlTargetSteeringDeg.toFixed(1) + " deg"
+                                    Layout.preferredWidth: Math.round(70 * root.uiScale)
                                     horizontalAlignment: Text.AlignRight
                                     font.family: root.monoFontFamily
                                 }
@@ -230,27 +273,22 @@ Item {
                         anchors.fill: parent
                         spacing: Math.round(10 * root.uiScale)
 
-                        Label {
-                            text: "시험 패턴"
-                            font.bold: true
-                            font.pixelSize: Math.round(17 * root.uiScale)
-                            color: "#172033"
-                        }
-                        Label {
+                        RowLayout {
                             Layout.fillWidth: true
-                            text: "패턴은 급격한 ±90도 스텝을 쓰지 않습니다. 저속/완만한 각도 변화로 0x503, 0x510~0x513을 반복 송신하고, 실제 성공은 CAN_TX_RAW audit로만 판단합니다."
-                            wrapMode: Text.WordWrap
-                            color: "#64748b"
-                            font.pixelSize: Math.round(11 * root.uiScale)
-                        }
-
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: Math.round(8 * root.uiScale)
-                            Button { text: "완만 조향 -30/+30"; onClicked: appController.controlRunPattern("sweep") }
-                            Button { text: "가변 rpm 조향"; onClicked: appController.controlRunPattern("variable") }
-                            Button { text: "저속 피벗"; onClicked: appController.controlRunPattern("spin") }
-                            Button { text: "패턴 정지"; onClicked: appController.controlStopPattern() }
+                            Label {
+                                text: "제어 증거 체인"
+                                font.bold: true
+                                font.pixelSize: Math.round(17 * root.uiScale)
+                                color: "#172033"
+                            }
+                            Item { Layout.fillWidth: true }
+                            Label {
+                                text: appController.controlEvidenceStatsSummary
+                                color: "#64748b"
+                                font.family: root.monoFontFamily
+                                font.pixelSize: Math.round(10 * root.uiScale)
+                                elide: Text.ElideRight
+                            }
                         }
 
                         GridLayout {
@@ -261,7 +299,7 @@ Item {
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: Math.round(86 * root.uiScale)
+                                Layout.preferredHeight: Math.round(92 * root.uiScale)
                                 radius: 10
                                 color: "#eff6ff"
                                 border.color: "#bfdbfe"
@@ -269,13 +307,13 @@ Item {
                                     anchors.fill: parent
                                     anchors.margins: Math.round(9 * root.uiScale)
                                     spacing: 3
-                                    Label { text: "Qt 요청"; font.bold: true; color: "#1d4ed8" }
+                                    Label { text: "Host 요청 / Qt write"; font.bold: true; color: "#1d4ed8" }
                                     Label {
                                         Layout.fillWidth: true
                                         text: appController.controlLastCommandSummary
                                         wrapMode: Text.WordWrap
                                         elide: Text.ElideRight
-                                        maximumLineCount: 2
+                                        maximumLineCount: 3
                                         color: "#334155"
                                         font.family: root.monoFontFamily
                                         font.pixelSize: Math.round(10 * root.uiScale)
@@ -285,21 +323,21 @@ Item {
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: Math.round(86 * root.uiScale)
+                                Layout.preferredHeight: Math.round(92 * root.uiScale)
                                 radius: 10
-                                color: root.ackKind() === "bad" ? "#fff1f2" : "#f8fafc"
-                                border.color: root.ackKind() === "bad" ? "#fecdd3" : "#dbe5f0"
+                                color: root.panelColor(root.ackKind())
+                                border.color: root.panelBorder(root.ackKind())
                                 ColumnLayout {
                                     anchors.fill: parent
                                     anchors.margins: Math.round(9 * root.uiScale)
                                     spacing: 3
-                                    Label { text: "CONTROL_ACK"; font.bold: true; color: root.ackKind() === "bad" ? "#be123c" : "#475569" }
+                                    Label { text: "CONTROL_ACK"; font.bold: true; color: root.panelText(root.ackKind()) }
                                     Label {
                                         Layout.fillWidth: true
                                         text: appController.controlLastAckSummary
                                         wrapMode: Text.WordWrap
                                         elide: Text.ElideRight
-                                        maximumLineCount: 2
+                                        maximumLineCount: 3
                                         color: "#334155"
                                         font.family: root.monoFontFamily
                                         font.pixelSize: Math.round(10 * root.uiScale)
@@ -309,21 +347,21 @@ Item {
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: Math.round(86 * root.uiScale)
+                                Layout.preferredHeight: Math.round(92 * root.uiScale)
                                 radius: 10
-                                color: "#ecfdf3"
-                                border.color: "#bbf7d0"
+                                color: root.panelColor(root.auditKind())
+                                border.color: root.panelBorder(root.auditKind())
                                 ColumnLayout {
                                     anchors.fill: parent
                                     anchors.margins: Math.round(9 * root.uiScale)
                                     spacing: 3
-                                    Label { text: "실제 TX audit"; font.bold: true; color: "#166534" }
+                                    Label { text: "실제 TX audit"; font.bold: true; color: root.panelText(root.auditKind()) }
                                     Label {
                                         Layout.fillWidth: true
                                         text: appController.controlLastAuditSummary
                                         wrapMode: Text.WordWrap
                                         elide: Text.ElideRight
-                                        maximumLineCount: 2
+                                        maximumLineCount: 3
                                         color: "#334155"
                                         font.family: root.monoFontFamily
                                         font.pixelSize: Math.round(10 * root.uiScale)
@@ -337,23 +375,31 @@ Item {
                             radius: 10
                             color: "#fff7ed"
                             border.color: "#fed7aa"
-                            implicitHeight: statsLabel.implicitHeight + Math.round(18 * root.uiScale)
+                            implicitHeight: patternText.implicitHeight + Math.round(18 * root.uiScale)
                             Label {
-                                id: statsLabel
+                                id: patternText
                                 anchors.fill: parent
                                 anchors.margins: Math.round(9 * root.uiScale)
-                                text: appController.controlEvidenceStatsSummary
+                                text: "테스트 패턴은 급격한 ±90도 스텝을 쓰지 않습니다. 저속/완만한 각도 변화로 0x503, 0x510~0x513을 반복 송신하고, 실제 성공은 CAN_TX_RAW audit로만 판단합니다."
                                 wrapMode: Text.WordWrap
                                 color: "#9a3412"
-                                font.family: root.monoFontFamily
-                                font.pixelSize: Math.round(10 * root.uiScale)
+                                font.pixelSize: Math.round(11 * root.uiScale)
                             }
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: Math.round(8 * root.uiScale)
+                            Button { text: "완만 조향 -30/+30"; onClicked: appController.controlRunPattern("sweep") }
+                            Button { text: "가변 rpm 조향"; onClicked: appController.controlRunPattern("variable") }
+                            Button { text: "저속 피벗"; onClicked: appController.controlRunPattern("spin") }
+                            Button { text: "패턴 정지"; onClicked: appController.controlStopPattern() }
                         }
 
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            Layout.minimumHeight: Math.round(180 * root.uiScale)
+                            Layout.minimumHeight: Math.round(220 * root.uiScale)
                             radius: 10
                             color: "#f8fafc"
                             border.color: "#dbe5f0"
@@ -365,7 +411,7 @@ Item {
 
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Label { text: "증거 타임라인"; font.bold: true; color: "#172033" }
+                                    Label { text: "최근 제어 evidence"; font.bold: true; color: "#172033" }
                                     Label {
                                         text: "반복 OK 이벤트는 샘플링 표시"
                                         color: "#64748b"
@@ -383,8 +429,8 @@ Item {
                                     delegate: Rectangle {
                                         width: ListView.view.width
                                         radius: 8
-                                        color: level === "ok" ? "#ecfdf3" : (level === "error" ? "#fff1f2" : (level === "warn" ? "#fff7ed" : "#ffffff"))
-                                        border.color: level === "ok" ? "#bbf7d0" : (level === "error" ? "#fecdd3" : (level === "warn" ? "#fed7aa" : "#e2e8f0"))
+                                        color: root.panelColor(level)
+                                        border.color: root.panelBorder(level)
                                         implicitHeight: eventColumn.implicitHeight + Math.round(12 * root.uiScale)
 
                                         ColumnLayout {

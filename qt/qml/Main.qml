@@ -504,7 +504,7 @@ ApplicationWindow {
         ListElement { key: "graph_overview"; title: "전체그래프"; opened: false }
         ListElement { key: "alarm"; title: "경보"; opened: false }
         ListElement { key: "settings"; title: "설정"; opened: false }
-        ListElement { key: "control"; title: "Control"; opened: false }
+        ListElement { key: "control"; title: "제어"; opened: false }
     }
 
     Component {
