@@ -14,6 +14,7 @@ class HostDownlinkParser {
   HostDownlinkParser(FrameHandler frame_handler, CrcFailureHandler crc_failure_handler,
                      void* ctx = nullptr);
 
+  void reset();
   void service(Stream& stream, int budget);
 
  private:

@@ -35,6 +35,7 @@ struct CapabilityPayloadConfig {
   uint8_t limitation_flags = 0;
   bool include_v2 = false;
   bool include_v3 = false;
+  bool include_v4 = false;
   uint8_t bus_count = 0;
   uint16_t capability_v2_flags = 0;
   uint32_t supported_uplink_records = 0;
@@ -44,6 +45,10 @@ struct CapabilityPayloadConfig {
   uint32_t firmware_build_id = 0;
   uint16_t host_tx_queue_size = 0;
   uint16_t capability_v3_flags = 0;
+  uint32_t stream_feature_flags = 0;
+  uint32_t stream_epoch = 0;
+  uint32_t record_backlog_size = 0;
+  uint32_t replay_chunk_max_raw_bytes = 0;
   CapabilityBusDescriptor buses[2] = {};
 };
 

@@ -11,6 +11,10 @@ HostDownlinkParser::HostDownlinkParser(FrameHandler frame_handler,
                                        void* ctx)
     : frame_handler_(frame_handler), crc_failure_handler_(crc_failure_handler), ctx_(ctx) {}
 
+void HostDownlinkParser::reset() {
+  len_ = 0;
+}
+
 void HostDownlinkParser::drop(uint16_t count) {
   if (count >= len_) {
     len_ = 0;

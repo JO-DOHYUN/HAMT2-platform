@@ -83,7 +83,16 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
   wr_u16_le(&payload[100], config.host_tx_queue_size);
   wr_u16_le(&payload[102], config.capability_v3_flags);
 
-  return kCapabilityV3PayloadLen;
+  if (!config.include_v4 || capacity < kCapabilityV4PayloadLen) {
+    return kCapabilityV3PayloadLen;
+  }
+
+  wr_u32_le(&payload[112], config.stream_feature_flags);
+  wr_u32_le(&payload[116], config.stream_epoch);
+  wr_u32_le(&payload[120], config.record_backlog_size);
+  wr_u32_le(&payload[124], config.replay_chunk_max_raw_bytes);
+
+  return kCapabilityV4PayloadLen;
 }
 
 }  // namespace csm::board

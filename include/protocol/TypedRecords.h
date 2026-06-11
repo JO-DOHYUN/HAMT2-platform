@@ -48,11 +48,23 @@ static constexpr uint16_t kBoardEventPayloadLen = 16;
 static constexpr uint16_t kBoardHealthPayloadLen = 52;
 static constexpr uint16_t kBoardHealthV1PayloadLen = 52;
 static constexpr uint16_t kBoardHealthV2PayloadLen = 128;
+static constexpr uint16_t kBoardHealthV3PayloadLen = 160;
+static constexpr uint16_t kBoardHealthV4PayloadLen = 224;
 static constexpr uint16_t kCapabilityPayloadLen = 36;
 static constexpr uint16_t kCapabilityV1PayloadLen = 36;
 static constexpr uint16_t kCapabilityV2PayloadLen = 80;
 static constexpr uint16_t kCapabilityV3PayloadLen = 112;
+static constexpr uint16_t kCapabilityV4PayloadLen = 128;
 static constexpr uint8_t kCapabilityV2BusDescriptorLen = 20;
 static constexpr uint16_t kAdcSamplePayloadLen = 44;
+static constexpr uint16_t kStreamCursorPayloadLen = 36;
+static constexpr uint16_t kReplayChunkHeaderLen = 28;
+static constexpr uint16_t kReplayChunkMaxRawBytes = kMaxPayloadLen - kReplayChunkHeaderLen;
+static constexpr uint16_t kCanRxSegmentHeaderLen = 44;
+static constexpr uint16_t kCanRxSegmentItemLen = 19;
+static constexpr uint16_t kCanRxSegmentMaxItems =
+    (kMaxPayloadLen - kCanRxSegmentHeaderLen) / kCanRxSegmentItemLen;
+static constexpr uint32_t kStreamFeatureCanRxSegment = 1u << 5;
+static constexpr uint32_t kStreamFeatureSegmentAckWindow = 1u << 6;
 
 }  // namespace csm

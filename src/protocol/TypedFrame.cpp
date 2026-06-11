@@ -41,6 +41,11 @@ uint32_t rd_u32_le(const uint8_t* p) {
          (static_cast<uint32_t>(p[3]) << 24);
 }
 
+uint64_t rd_u64_le(const uint8_t* p) {
+  return static_cast<uint64_t>(rd_u32_le(p)) |
+         (static_cast<uint64_t>(rd_u32_le(p + 4)) << 32);
+}
+
 uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
   uint16_t crc = 0xFFFF;
   for (size_t i = 0; i < len; ++i) {
@@ -51,6 +56,17 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
     }
   }
   return crc;
+}
+
+uint32_t crc32_ieee(const uint8_t* data, size_t len) {
+  uint32_t crc = 0xFFFFFFFFu;
+  for (size_t i = 0; i < len; ++i) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+    }
+  }
+  return ~crc;
 }
 
 uint64_t mono64_us() {
@@ -96,4 +112,3 @@ bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
 }
 
 }  // namespace csm
-
