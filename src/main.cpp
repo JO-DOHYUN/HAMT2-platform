@@ -73,6 +73,30 @@
 #define BOARD_CAN_SERIAL_DRAIN_BUDGET 32
 #endif
 
+#ifndef BOARD_CAN_QUEUE_SIZE
+#define BOARD_CAN_QUEUE_SIZE 4096
+#endif
+
+#ifndef BOARD_SERIAL_TX_RING_SIZE
+#define BOARD_SERIAL_TX_RING_SIZE 65536
+#endif
+
+#ifndef BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES
+#define BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES 64
+#endif
+
+#ifndef BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET
+#define BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET 128
+#endif
+
+#ifndef BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE
+#define BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE 2
+#endif
+
+#ifndef BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET
+#define BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET 512
+#endif
+
 #ifndef BOARD_CAN_ERROR_EVENT_PERIOD_MS
 #define BOARD_CAN_ERROR_EVENT_PERIOD_MS 500
 #endif
@@ -168,6 +192,26 @@
 #define BOARD_MCP2515_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_MCP2515
 #endif
 
+#ifndef BOARD_MCP2515_CAPABILITY_TERMINATION_POLICY
+#define BOARD_MCP2515_CAPABILITY_TERMINATION_POLICY 0
+#endif
+
+#ifndef BOARD_MCP2515_CAPABILITY_ISOLATION_POLICY
+#define BOARD_MCP2515_CAPABILITY_ISOLATION_POLICY 0
+#endif
+
+#ifndef BOARD_MCP2515_INIT_RETRY_MIN_MS
+#define BOARD_MCP2515_INIT_RETRY_MIN_MS 1000
+#endif
+
+#ifndef BOARD_MCP2515_INIT_RETRY_MAX_MS
+#define BOARD_MCP2515_INIT_RETRY_MAX_MS 30000
+#endif
+
+#ifndef BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
+#define BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT 0
+#endif
+
 #ifndef BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
 #define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
 #endif
@@ -190,6 +234,10 @@
 
 #ifndef BOARD_ENABLE_CAN_TX_GATE_FOR_TEST
 #define BOARD_ENABLE_CAN_TX_GATE_FOR_TEST BOARD_ENABLE_BUILTIN_CAN_TX_TEST
+#endif
+
+#ifndef BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX
+#define BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX BOARD_ENABLE_BUILTIN_CAN_RX
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
@@ -280,8 +328,9 @@ struct EncoderSnapshot {
   uint32_t fault_flags;
 };
 
-static constexpr uint32_t kCanQueueSize = 1024;
+static constexpr uint32_t kCanQueueSize = BOARD_CAN_QUEUE_SIZE;
 static constexpr uint32_t kCanQueueMask = kCanQueueSize - 1;
+static_assert((kCanQueueSize & kCanQueueMask) == 0, "BOARD_CAN_QUEUE_SIZE must be a power of two");
 
 static constexpr uint8_t kVoltageAdcBits = 12;
 static constexpr uint8_t kVoltageChannelCount = 4;
@@ -316,12 +365,14 @@ static volatile uint64_t encoder_index_mono_us = 0;
 static volatile uint32_t encoder_index_count = 0;
 
 static uint16_t transport_seq = 0;
-static constexpr uint32_t kSerialTxRingSize = 8192;
+static constexpr uint32_t kSerialTxRingSize = BOARD_SERIAL_TX_RING_SIZE;
 static constexpr uint32_t kSerialTxRingMask = kSerialTxRingSize - 1;
+static_assert((kSerialTxRingSize & kSerialTxRingMask) == 0, "BOARD_SERIAL_TX_RING_SIZE must be a power of two");
 static uint8_t serial_tx_ring[kSerialTxRingSize];
 static uint32_t serial_tx_head = 0;
 static uint32_t serial_tx_tail = 0;
 static uint32_t serial_tx_blocked_since_ms = 0;
+static uint32_t serial_tx_bytes_since_can_service = 0;
 #if BOARD_ENABLE_MCP2515
 static MCP2515* mcp2515 = nullptr;
 static volatile bool mcp2515_irq_pending = false;
@@ -414,8 +465,36 @@ static uint32_t last_capability_ms = 0;
 static uint32_t last_encoder_derived_ms = 0;
 static uint32_t last_watchdog_toggle_ms = 0;
 static uint32_t last_can_init_retry_ms = 0;
+static uint32_t can_init_retry_delay_ms = BOARD_MCP2515_INIT_RETRY_MIN_MS;
+static uint32_t can_init_retry_count = 0;
+#if BOARD_ENABLE_MCP2515
+static bool mcp2515_listen_only_mode = false;
+#endif
 static bool usb_host_was_connected = false;
 static uint32_t usb_disconnected_since_ms = 0;
+
+static void reset_can_init_retry_backoff() {
+  can_init_retry_delay_ms = BOARD_MCP2515_INIT_RETRY_MIN_MS;
+  if (can_init_retry_delay_ms == 0) {
+    can_init_retry_delay_ms = 1000;
+  }
+  can_init_retry_count = 0;
+}
+
+static void note_can_init_retry_failure() {
+  can_init_retry_count++;
+  uint32_t next_delay_ms = can_init_retry_delay_ms == 0 ? BOARD_MCP2515_INIT_RETRY_MIN_MS : can_init_retry_delay_ms;
+  if (next_delay_ms == 0) {
+    next_delay_ms = 1000;
+  } else if (next_delay_ms < BOARD_MCP2515_INIT_RETRY_MAX_MS) {
+    const uint32_t doubled = next_delay_ms * 2;
+    next_delay_ms = (doubled > next_delay_ms) ? doubled : BOARD_MCP2515_INIT_RETRY_MAX_MS;
+    if (next_delay_ms > BOARD_MCP2515_INIT_RETRY_MAX_MS) {
+      next_delay_ms = BOARD_MCP2515_INIT_RETRY_MAX_MS;
+    }
+  }
+  can_init_retry_delay_ms = next_delay_ms;
+}
 
 static uint32_t serial_tx_queued_bytes() {
   return (serial_tx_head - serial_tx_tail) & kSerialTxRingMask;
@@ -425,10 +504,13 @@ static uint32_t serial_tx_free_bytes() {
   return (kSerialTxRingSize - 1) - serial_tx_queued_bytes();
 }
 
+static void pump_can_rx_to_queue(int budget);
+
 static void clear_serial_tx_ring() {
   serial_tx_head = 0;
   serial_tx_tail = 0;
   serial_tx_blocked_since_ms = 0;
+  serial_tx_bytes_since_can_service = 0;
 }
 
 static bool enqueue_serial_tx_bytes(const uint8_t* data, uint32_t len) {
@@ -474,6 +556,13 @@ static void service_serial_tx(uint32_t byte_budget = 512) {
       break;
     }
     byte_budget -= actual;
+    serial_tx_bytes_since_can_service += actual;
+    if (serial_tx_bytes_since_can_service >= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES) {
+      serial_tx_bytes_since_can_service = 0;
+      if (!kTestMode) {
+        pump_can_rx_to_queue(BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET);
+      }
+    }
   }
 #else
   (void)byte_budget;
@@ -726,16 +815,25 @@ static void emit_capability() {
 #endif
 
 #if BOARD_HW_PROFILE_MID_MCP2515
+#if BOARD_ENABLE_MCP2515
+  const uint8_t mcp_runtime_ready = (can_backend_ok && mcp2515 != nullptr) ? 1 : 0;
+#else
+  const uint8_t mcp_runtime_ready = 0;
+#endif
+  const uint8_t mcp_tx_runtime_supported =
+      (mcp_runtime_ready && (BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_MCP2515_TX_TEST)) ? 1 : 0;
+  const uint8_t mcp_control_runtime_allowed =
+      (mcp_tx_runtime_supported && BOARD_MCP2515_CONTROL_TX_ALLOWED) ? 1 : 0;
   config.buses[0] = make_capability_bus_descriptor(
       BOARD_MCP2515_BUS_ID,
       0,
       1,
       1,
-      BOARD_ENABLE_MCP2515 ? 1 : 0,
-      (BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_MCP2515_TX_TEST) ? 1 : 0,
-      BOARD_MCP2515_CONTROL_TX_ALLOWED ? 1 : 0,
-      3,
-      1);
+      mcp_runtime_ready,
+      mcp_tx_runtime_supported,
+      mcp_control_runtime_allowed,
+      BOARD_MCP2515_CAPABILITY_TERMINATION_POLICY,
+      BOARD_MCP2515_CAPABILITY_ISOLATION_POLICY);
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
@@ -1182,8 +1280,11 @@ static void update_safety_state() {
   const SafetyState before = safety_supervisor.state();
   safety_supervisor.update(millis(), inputs);
   safety_state = safety_supervisor.state();
+  const bool rx_transceiver_enable = BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0;
   digitalWrite(BoardPins::CanTxEnable,
-               (safety_supervisor.canDriveTxGate() || should_enable_can_tx_gate_for_test()) ? HIGH : LOW);
+               (rx_transceiver_enable ||
+                safety_supervisor.canDriveTxGate() ||
+                should_enable_can_tx_gate_for_test()) ? HIGH : LOW);
 
   if (inputs.estop_asserted && !estop_prev) {
     emit_board_event(EventEstopAsserted, 0, 1);
@@ -1393,6 +1494,7 @@ static bool init_can_backend() {
 
   static MCP2515 can_controller(BoardPins::CanSpiCsN, kMcp2515SpiHz);
   mcp2515 = &can_controller;
+  mcp2515_listen_only_mode = false;
 
   SPI.begin();
 
@@ -1422,9 +1524,14 @@ static bool init_can_backend() {
     emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err), 1);
     return false;
   }
-  err = mcp2515->setNormalMode();
+  err =
+#if BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
+      mcp2515->setListenOnlyMode();
+#else
+      mcp2515->setNormalMode();
+#endif
 #if BOARD_MCP2515_TX_USE_ONESHOT
-  if (err == MCP2515::ERROR_OK) {
+  if (err == MCP2515::ERROR_OK && !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) {
     mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlOsm, kMcpCanctrlOsm);
   }
 #endif
@@ -1433,6 +1540,7 @@ static bool init_can_backend() {
     emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err), 2);
     return false;
   }
+  mcp2515_listen_only_mode = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT != 0;
 #if BOARD_CAN_IRQ_MODE == 2
   if (!mcp_service.exti_attached) {
     attachInterrupt(digitalPinToInterrupt(BoardPins::CanIntN), on_mcp2515_int, FALLING);
@@ -1624,6 +1732,18 @@ static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus
   if (mcp2515 == nullptr || mcp2515_pending_tx.active) {
     return MCP2515::ERROR_ALLTXBUSY;
   }
+#if BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
+  if (mcp2515_listen_only_mode) {
+    const MCP2515::ERROR mode_err = mcp2515->setNormalMode();
+    if (mode_err != MCP2515::ERROR_OK) {
+      return mode_err;
+    }
+    mcp2515_listen_only_mode = false;
+#if BOARD_MCP2515_TX_USE_ONESHOT
+    mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlOsm, kMcpCanctrlOsm);
+#endif
+  }
+#endif
   if ((mcp2515_raw_read_register(kMcpRegTxb0ctrl) & kMcpTxbTxreq) != 0) {
     return MCP2515::ERROR_ALLTXBUSY;
   }
@@ -2184,8 +2304,16 @@ static void test_push_fake_can_if_needed() {
 
 static void drain_can_records(int budget) {
   CanRxItem item;
+  int records_since_mcp_service = 0;
   while (budget-- > 0 && can_queue_pop(item)) {
     emit_can_rx_raw(item);
+    ++records_since_mcp_service;
+    if (records_since_mcp_service >= BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE) {
+      records_since_mcp_service = 0;
+      if (!kTestMode && can_backend_ok) {
+        pump_can_rx_to_queue(BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET);
+      }
+    }
   }
 }
 
@@ -2253,13 +2381,20 @@ void setup() {
   if (!kTestMode && BOARD_ENABLE_MCP2515_INIT) {
     can_backend_ok = init_can_backend();
     if (!can_backend_ok) {
-      emit_board_event(EventCanBeginFailed, 0, 1);
+      last_can_init_retry_ms = millis();
+      note_can_init_retry_failure();
+      emit_board_event(EventCanBeginFailed, 0, can_init_retry_count);
+    } else {
+      reset_can_init_retry_backoff();
     }
   }
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   builtin_can_tx_ok = init_builtin_can_lane();
 #endif
+
+  emit_capability();
+  last_capability_ms = millis();
 
   last_health_ms = millis();
   last_encoder_derived_ms = millis();
@@ -2270,6 +2405,9 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
+  if (!kTestMode && can_backend_ok) {
+    pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
+  }
   service_serial_tx(512);
   service_host_downlink(256);
   update_safety_state();
@@ -2279,11 +2417,16 @@ void loop() {
     test_push_fake_can_if_needed();
   } else if (can_backend_ok) {
     pump_can_rx_to_queue(512);
-  } else if (BOARD_ENABLE_MCP2515_INIT && (millis() - last_can_init_retry_ms >= 1000)) {
+  } else if (BOARD_ENABLE_MCP2515_INIT && (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
     last_can_init_retry_ms = millis();
     can_backend_ok = init_can_backend();
     if (!can_backend_ok) {
-      emit_board_event(EventCanBeginFailed, 1, 1);
+      note_can_init_retry_failure();
+      emit_board_event(EventCanBeginFailed, 1, can_init_retry_count);
+    } else {
+      reset_can_init_retry_backoff();
+      emit_capability();
+      last_capability_ms = millis();
     }
   }
 
