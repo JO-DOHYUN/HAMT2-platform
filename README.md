@@ -1,34 +1,48 @@
-# HAMT2-platform
+# HAMT2 CSM Firmware
 
-Monorepo for the HAMT2 CSM firmware, VMS/Qt application, and shared typed
-transport/protocol contracts.
+Standalone PlatformIO repository for the HAMT2 CSM board firmware.
 
-This baseline freezes the working CSM state before VMS/Qt integration. The
-repository layout is intentionally kept stable; VMS cleanup and integration are
-next-step work.
+Do CSM build and upload work from this folder:
 
-## Layout
+```text
+C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
+```
 
-- `board/`, `src/`, `include/`: CSM firmware and board-facing documentation
-- `qt/`: VMS/Qt application work area
-- `shared/`: cross-project protocol and record contracts
-- `docs/`: architecture, AI harness, and verification notes
-- `AGENTS.md`, `BRIEF.md`: Codex routing and current repository state
+VSM/Qt and Android app work belong in separate repositories. Do not place or
+build nested app workspaces under this CSM folder.
 
-## Current CAN Direction
+## Active Target
 
-The current Mid Carrier CSM target is Classic CAN 2.0, not CAN FD:
+- Board: Portenta H7 M7 + Mid Carrier ASX00055
+- env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+- `bus0`: external MCP2515/TJA1050, Classic CAN 2.0 500 kbps
+- `bus1`: Mid Carrier J4 CAN1/U2, Classic CAN 2.0 500 kbps
+- Live stream: typed transport v1
+- High-load RX: `CAN_RX_SEGMENT`
+- TX evidence: `CONTROL_ACK` is board decision, `CAN_TX_RAW` is actual CAN write audit
 
-- `bus0`: external MCP2515/TJA1050 on Mid Carrier D7..D11 SPI pins
-- `bus0` emits typed `CAN_RX_RAW` and audited `CAN_TX_RAW`
-- `bus1`: Mid Carrier J4 CAN1 through onboard U2, enabled by the J4 SW2 pair
-- `HOST_CAN_TX_REQUEST` is accepted on `bus0` and `bus1` for the allowlisted control IDs
-- final dual-channel env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
-- Dual internal CAN0/CAN1 through TJA1051-class transceivers is deferred until a
-  second internal CAN backend is implemented and HIL-proven
+## Build
 
-## Shared Contract
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm
+```
 
-`shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the source of truth for the CSM/VMS
-typed stream, record payloads, bus capability descriptors, and host control
-audit rules.
+## Upload
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm -t upload
+```
+
+## Verify Firmware Identity
+
+```powershell
+py -3 pc_tools\verify_typed_stream.py --port COM7 --seconds 4 --max-records 20
+```
+
+`CAPABILITY` must show the expected env, git SHA, dirty flag, MCP SPI speed,
+IRQ mode, and drain budget.
+
+## Contracts
+
+`shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the wire-contract source of truth
+for CSM/VSM typed records.

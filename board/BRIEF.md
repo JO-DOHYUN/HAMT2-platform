@@ -7,8 +7,10 @@
 - final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
 - current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
 - current CSM CAN: Portenta H7 M7 + Mid Carrier ASX00055 + MCP2515/TJA1050 SPI
-  module, `MCP_8MHZ`, `CAN_500KBPS`, 2 MHz SPI, `CS/SCK/SI/SO/INT` level shifted.
-  `bus=0` is the active typed RX and audited control TX lane.
+  module, `MCP_8MHZ`, `CAN_500KBPS`, 8 MHz SPI, polling drain
+  (`BOARD_CAN_IRQ_MODE=0`), `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`,
+  `CS/SCK/SI/SO/INT` level shifted. `bus=0` is the active typed RX and audited
+  control TX lane.
 - deferred hardware target: dual internal CAN0/CAN1 through TJA1051-class
   transceivers. This is not active because the current ArduinoCore Portenta
   profile exposes only one practical CAN object.

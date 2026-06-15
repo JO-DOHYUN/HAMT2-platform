@@ -30,8 +30,9 @@ Record types:
 - `13 HOST_SET_CONTROL_POLICY` host-to-board downlink only, reserved
 - `14 HOST_QUERY_CAPABILITY` host-to-board downlink only
 - `15 HOST_CLEAR_FAULT_LOCKOUT` host-to-board downlink only
+- `16 CAN_RX_SEGMENT`
 
-Maximum payload length is `160` bytes for the current CSM rebuild. Hosts must
+Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
@@ -44,22 +45,46 @@ parse by `payload_len` and skip unknown trailing bytes.
 - `22..25 total u32`: RX or TX success counter
 - `26..29 dropped_or_failed u32`
 
+`CAN_RX_SEGMENT` payload, `32 + frame_count * 30` bytes:
+- This is lossless packing for high-load receive. It is not compression,
+  sampling, or summary data.
+- Header:
+  - `0..7 segment_seq64 u64`
+  - `8..15 first_capture_seq64 u64`
+  - `16..17 frame_count u16`
+  - `18 entry_size u8`, currently `30`
+  - `19 flags u8`, bit0 means `capture_seq64` is valid
+  - `20..23 dropped_before_segment u32`
+  - `24..27 fifo_before_segment u32`
+  - `28..31 reserved u32`
+- Entry, repeated `frame_count` times:
+  - `0..7 capture_seq64 u64`
+  - `8..15 mono_us u64`
+  - `16..19 can_id_flags u32`
+  - `20 dlc_flags u8`
+  - `21 bus u8`
+  - `22..29 data[8]`
+
 Current board baseline:
-- MCP2515 receive frames emit `CAN_RX_RAW bus=0`.
-- Portenta built-in CAN receive frames emit `CAN_RX_RAW bus=1`.
+- MCP2515 receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
+- Portenta built-in CAN receive frames are emitted as `CAN_RX_SEGMENT` entries
+  with `bus=1`.
+- `CAN_RX_RAW` remains protocol-compatible for older hosts/builds, but the
+  high-load dual-channel build uses `CAN_RX_SEGMENT` for live RX uplink.
 - Successful Portenta built-in CAN writes emit `CAN_TX_RAW bus=1`.
 
 Current Mid Carrier MCP2515 CSM profile:
 - Profile major `3`.
 - `bus=0`: external MCP2515/TJA1050 on Mid Carrier `D7..D11` SPI pins,
-  Classic CAN 2.0, `MCP_8MHZ`, `CAN_500KBPS`, 2 MHz SPI in the current CSM
-  build profile.
-- `bus=0` emits `CAN_RX_RAW` for received frames and `CAN_TX_RAW` for successful
-  host-commanded or bench-test writes.
+  Classic CAN 2.0, `MCP_8MHZ`, `CAN_500KBPS`. The current high-load dual CSM
+  build profile uses polling drain (`BOARD_CAN_IRQ_MODE=0`), 8 MHz MCP SPI, and
+  `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`.
+- `bus=0` emits `CAN_RX_SEGMENT` entries for received frames and `CAN_TX_RAW`
+  for successful host-commanded or bench-test writes.
 - final dual-channel runtime env `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
   additionally exposes `bus=1`: Mid Carrier J4 CAN1 through onboard U2,
-  Classic CAN 2.0, 500 kbps. `bus=1` emits `CAN_RX_RAW` and accepts audited
-  allowlisted host-commanded writes.
+  Classic CAN 2.0, 500 kbps. `bus=1` emits `CAN_RX_SEGMENT` entries and accepts
+  audited allowlisted host-commanded writes.
 - The previous dual internal CAN0/CAN1 + TJA1051 target is deferred in this
   repository until a second internal CAN controller backend is implemented and
   HIL-proven.
@@ -190,6 +215,11 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `20` host control session decision
 - `21` unsupported host command
 - `22` fault lockout cleared
+- `23` firmware identity boot marker. `detail low byte` is identity payload
+  version, `detail high byte` is dirty flag, `counter` is firmware build id.
+- `24` serial TX backpressure observed
+- `25` serial TX ring clear. `detail` is clear reason and `counter` is dropped
+  queued byte count.
 
 `ADC_SAMPLE` payload, 44 bytes:
 - `0..7 mono_us u64`
@@ -308,10 +338,25 @@ Extended 112-byte `CAPABILITY` payload:
 - `102..103 capability_v3_flags u16`
 - `104..111 reserved`
 
+Extended 192-byte `CAPABILITY` payload:
+- `0..111`: same as the 112-byte payload.
+- `112 firmware_identity_version u8`: currently `1`
+- `113 git_dirty u8`: `1` means the firmware was built from a dirty local tree
+- `114 BOARD_CAN_IRQ_MODE u8`
+- `115 reserved u8`
+- `116..119 build_epoch_s u32`
+- `120..123 firmware_build_id u32`
+- `124..127 MCP SPI Hz u32`
+- `128..129 CAN record drain budget u16`
+- `130..131 serial TX ring size KiB u16`
+- `132..143 git short sha ASCII, zero-padded`
+- `144..191 PlatformIO env name ASCII, zero-padded`
+
 Extended 128-byte `BOARD_HEALTH` payload:
 - `0..51`: same prefix as the original 52-byte health payload.
-- `52 health_payload_version u8`: currently `2`
-- `53 health_payload_len u8`: currently `128`
+- `52 health_payload_version u8`: `2` for the old extended payload, `4` for the
+  high-load CSM payload
+- `53 health_payload_len u8`
 - `54 safety_state u8`
 - `55 safety_fault_bits u8`
 - `56..59 heartbeat_age_ms u32`
@@ -328,6 +373,25 @@ Extended 128-byte `BOARD_HEALTH` payload:
 - `116..119 backend_flags u32`
 - `120..123 host_heartbeat_total u32`
 - `124..127 host_control_session_total u32`
+
+Extended 192-byte `BOARD_HEALTH v4` payload:
+- `0..127`: same as the 128-byte payload.
+- `128..131 bus0_rx_total u32`
+- `132..135 bus0_drop_total u32`
+- `136..139 bus0_queue_depth u32`
+- `140..143 bus0_queue_high_water u32`
+- `144..147 bus1_rx_total u32`
+- `148..151 bus1_drop_total u32`
+- `152..155 bus1_queue_depth u32`
+- `156..159 bus1_queue_high_water u32`
+- `160..163 serial_enqueue_fail_total u32`
+- `164..167 serial_ring_clear_total u32`
+- `168..171 serial_ring_cleared_bytes_total u32`
+- `172..175 serial_backpressure_total u32`
+- `176..179 serial_tx_high_water_bytes u32`
+- `180..183 shared_can_queue_high_water u32`
+- `184..187 MCP drain time-budget-hit total u32`
+- `188..191 reserved`
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - `bus_count` is build-profile driven. Single-lane MCP profiles use

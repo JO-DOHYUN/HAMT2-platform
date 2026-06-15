@@ -22,8 +22,16 @@
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
 - `10 HOST_CAN_TX_REQUEST` host-to-board only
+- `11 HOST_HEARTBEAT` host-to-board only
+- `12 HOST_CONTROL_SESSION` host-to-board only
+- `16 CAN_RX_SEGMENT`
+
+## CAN_RX_SEGMENT
+Current high-load dual-CAN CSM emits CAN RX as `CAN_RX_SEGMENT`. This is a
+lossless packing record: one entry is one factual CAN frame with `capture_seq64`,
+`mono_us`, `bus`, `can_id_flags`, `dlc_flags`, and `data[8]`. VMS must expand
+every entry into the same truth path as `CAN_RX_RAW`.
 
 ## Compatibility
 Legacy fixed 20-byte data is replay/import compatibility only. It must not be
 mixed into the live typed stream parser.
-

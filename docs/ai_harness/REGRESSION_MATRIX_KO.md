@@ -27,6 +27,8 @@
   Mid Carrier J4/U2 descriptors
 - bus descriptor role is a non-authoritative `role_hint`; VMS must not hard-code
   System/Drive from bus id or descriptor role
+- live RX uplink uses `CAN_RX_SEGMENT`; every segment entry is one factual CAN
+  frame and must preserve `capture_seq64`, `mono_us`, bus, id, DLC, and payload
 - `BOARD_HEALTH` shows `can_drop=0`, `fifo_overflow=0`, `queue=0`, `fault=0`
   during final smoke
 - production host TX before heartbeat+arm is rejected with `CONTROL_ACK reason=9`

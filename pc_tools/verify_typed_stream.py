@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import struct
 import time
 
@@ -22,6 +23,7 @@ TYPE_NAMES = {
     13: "HOST_SET_CONTROL_POLICY",
     14: "HOST_QUERY_CAPABILITY",
     15: "HOST_CLEAR_FAULT_LOCKOUT",
+    16: "CAN_RX_SEGMENT",
 }
 
 BUS_ROLE_NAMES = {
@@ -43,6 +45,34 @@ BUS_TRANSCEIVER_NAMES = {
     2: "TJA1051",
     3: "MidCarrierU2",
     255: "unknown",
+}
+
+EVENT_NAMES = {
+    1: "BOOT",
+    2: "CAN_BEGIN_FAILED",
+    3: "CAN_RX_QUEUE_DROP",
+    4: "ENCODER_FAULT_ASSERTED",
+    5: "FIELD_POWER_LOST",
+    6: "ESTOP_ASSERTED",
+    7: "ENCODER_INDEX",
+    8: "ENCODER_WRAP",
+    9: "MCP2515_ERROR",
+    10: "MCP2515_SPI_SNAPSHOT",
+    11: "BUILTIN_CAN_BEGIN_FAILED",
+    12: "BUILTIN_CAN_TX_FAILED",
+    13: "HOST_FRAME_CRC_FAILED",
+    14: "HOST_CAN_TX_REJECTED",
+    15: "HOST_CAN_TX_ACCEPTED",
+    16: "CAN0_BACKEND_UNAVAILABLE",
+    17: "MCP2515_TX_FAILED",
+    18: "SAFETY_STATE_CHANGED",
+    19: "HOST_HEARTBEAT",
+    20: "HOST_CONTROL_SESSION",
+    21: "HOST_COMMAND_UNSUPPORTED",
+    22: "FAULT_LOCKOUT_CLEARED",
+    23: "FIRMWARE_IDENTITY",
+    24: "SERIAL_TX_BACKPRESSURE",
+    25: "SERIAL_TX_RING_CLEAR",
 }
 
 
@@ -76,6 +106,18 @@ def i32(payload: bytes, offset: int) -> int:
 
 def i64(payload: bytes, offset: int) -> int:
     return struct.unpack_from("<q", payload, offset)[0]
+
+
+def zstr(payload: bytes, offset: int, size: int) -> str:
+    raw = payload[offset : offset + size]
+    raw = raw.split(b"\x00", 1)[0]
+    return raw.decode("ascii", errors="replace")
+
+
+def format_epoch(epoch: int) -> str:
+    if epoch == 0:
+        return "unknown"
+    return datetime.datetime.fromtimestamp(epoch).isoformat(timespec="seconds")
 
 
 def capability_bus_desc(payload: bytes, offset: int) -> str:
@@ -118,7 +160,7 @@ def parse_frame(buf: bytearray):
     seq = u16(buf, 5)
     length = u16(buf, 7)
     frame_len = 2 + 1 + 1 + 1 + 2 + 2 + length + 2
-    if length > 256:
+    if length > 512:
         del buf[:2]
         return None
     if len(buf) < frame_len:
@@ -168,6 +210,33 @@ def describe(frame):
             f"dlc={dlc} data={data.hex(' ')} {tail}"
         )
 
+    if rtype == 16 and len(payload) >= 32:
+        segment_seq = u64(payload, 0)
+        first_capture_seq = u64(payload, 8)
+        frame_count = u16(payload, 16)
+        entry_size = payload[18]
+        dropped_before = u32(payload, 20)
+        fifo_before = u32(payload, 24)
+        preview = []
+        if entry_size >= 30 and len(payload) >= 32 + frame_count * entry_size:
+            for index in range(min(frame_count, 3)):
+                offset = 32 + index * entry_size
+                capture_seq = u64(payload, offset)
+                mono = u64(payload, offset + 8)
+                can_id_flags = u32(payload, offset + 16)
+                can_id = can_id_flags & 0x1FFFFFFF
+                dlc = payload[offset + 20] & 0x0F
+                bus = payload[offset + 21]
+                data = payload[offset + 22 : offset + 30]
+                preview.append(
+                    f"#{index} cap={capture_seq} t={mono} bus={bus} id=0x{can_id:X} dlc={dlc} data={data.hex(' ')}"
+                )
+        return (
+            f"[{name}] seq={seq} segment_seq={segment_seq} first_capture_seq={first_capture_seq} "
+            f"frames={frame_count} entry={entry_size} dropped_before={dropped_before} fifo_before={fifo_before} "
+            + " | ".join(preview)
+        )
+
     if rtype == 3 and len(payload) >= 28:
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} pos={i64(payload, 8)} "
@@ -213,6 +282,16 @@ def describe(frame):
 
     if rtype == 7 and len(payload) >= 16:
         code = u16(payload, 8)
+        event_name = EVENT_NAMES.get(code, f"code_{code}")
+        if code == 23:
+            detail = u16(payload, 10)
+            identity_version = detail & 0xFF
+            dirty = (detail >> 8) & 0xFF
+            return (
+                f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={code} "
+                f"name={event_name} identity_v={identity_version} dirty={dirty} "
+                f"build_id=0x{u32(payload, 12):08X}"
+            )
         if code == 10:
             detail = u16(payload, 10)
             counter = u32(payload, 12)
@@ -228,13 +307,13 @@ def describe(frame):
                 f"CANINTF=0x{canintf:02X} EFLG=0x{eflg:02X} extra=0x{extra:02X}"
             )
         return (
-            f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={u16(payload, 8)} "
+            f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={code} name={event_name} "
             f"detail={u16(payload, 10)} counter={u32(payload, 12)}"
         )
 
     if rtype == 8 and len(payload) >= 52:
         extra = ""
-        if len(payload) >= 128 and payload[52] == 2:
+        if len(payload) >= 128 and payload[52] in (2, 4):
             extra = (
                 f" health_v={payload[52]} safety_v2={payload[54]} fault_bits=0x{payload[55]:02X}"
                 f" heartbeat_age_ms={u32(payload, 56)} lease_ms={u32(payload, 60)}"
@@ -244,6 +323,21 @@ def describe(frame):
                 f" builtin_tx={u32(payload, 88)} builtin_fail={u32(payload, 92)}"
                 f" mcp_spi_err={u32(payload, 96)} mcp_err_flags={u32(payload, 100)}"
                 f" heartbeat_total={u32(payload, 120)} session_total={u32(payload, 124)}"
+            )
+        if len(payload) >= 192 and payload[52] == 4:
+            extra += (
+                f" bus0_rx={u32(payload, 128)} bus0_drop={u32(payload, 132)}"
+                f" bus0_q={u32(payload, 136)} bus0_high={u32(payload, 140)}"
+                f" bus1_rx={u32(payload, 144)} bus1_drop={u32(payload, 148)}"
+                f" bus1_q={u32(payload, 152)} bus1_high={u32(payload, 156)}"
+                f" serial_enqueue_fail={u32(payload, 160)}"
+                f" serial_clear={u32(payload, 164)}"
+                f" serial_clear_bytes={u32(payload, 168)}"
+                f" serial_backpressure={u32(payload, 172)}"
+                f" serial_high_bytes={u32(payload, 176)}"
+                f" can_q_high={u32(payload, 180)}"
+                f" mcp_drain_budget_hit={u32(payload, 184)}"
+                f" segment_enqueue_fail={u32(payload, 188)}"
             )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
@@ -284,7 +378,21 @@ def describe(frame):
                         f" uplink_mask=0x{u32(payload, 80):08X}"
                         f" downlink_mask=0x{u32(payload, 84):08X}"
                         f" safety_features=0x{u32(payload, 88):08X}"
+                        f" build_id=0x{u32(payload, 96):08X}"
                         f" host_tx_q={u16(payload, 100)}"
+                    )
+                if len(payload) >= 192 and payload[112] != 0:
+                    tail += (
+                        f" fw_identity_v={payload[112]}"
+                        f" dirty={payload[113]}"
+                        f" irq_mode={payload[114]}"
+                        f" built={format_epoch(u32(payload, 116))}"
+                        f" fw_build_id=0x{u32(payload, 120):08X}"
+                        f" mcp_spi_hz={u32(payload, 124)}"
+                        f" drain_budget={u16(payload, 128)}"
+                        f" serial_ring_kib={u16(payload, 130)}"
+                        f" git={zstr(payload, 132, 12)}"
+                        f" env={zstr(payload, 144, 48)}"
                     )
                 return tail
         return base

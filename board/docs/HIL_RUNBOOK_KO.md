@@ -17,7 +17,8 @@
   - `CAPABILITY` length 112, profile major 3.
   - bus0 descriptor backend MCP2515, bus1 descriptor backend ArduinoCAN.
   - bus descriptor role is `0` or non-authoritative hint only.
-  - `BOARD_HEALTH` length 128, health version 2, heartbeat/session counters visible.
+  - `BOARD_HEALTH` length 192, health version 4, heartbeat/session counters and
+    bus별 RX/drop/queue counters visible.
 - Reject gate:
   - Send `HOST_CAN_TX_REQUEST` before heartbeat and arm.
   - Expected: `CONTROL_ACK status=0 reason=9` or `10`.
@@ -34,5 +35,5 @@
 - Timeout:
   - Stop heartbeat for more than 300 ms.
   - Expected: new host TX is rejected.
-  - Expected: `BOARD_HEALTH v2` heartbeat age increases.
+  - Expected: `BOARD_HEALTH v4` heartbeat age increases.
   - Expected: no hidden CAN write occurs.

@@ -45,10 +45,15 @@ struct CapabilityPayloadConfig {
   uint32_t firmware_build_id = 0;
   uint16_t host_tx_queue_size = 0;
   uint16_t capability_v3_flags = 0;
-  uint32_t stream_feature_flags = 0;
-  uint32_t stream_epoch = 0;
-  uint32_t record_backlog_size = 0;
-  uint32_t replay_chunk_max_raw_bytes = 0;
+  uint8_t firmware_identity_version = 0;
+  bool firmware_dirty = true;
+  uint8_t firmware_irq_mode = 0;
+  uint32_t firmware_build_epoch = 0;
+  uint32_t mcp_spi_hz = 0;
+  uint16_t can_record_drain_budget = 0;
+  uint16_t serial_ring_kib = 0;
+  const char* firmware_git_sha = "unknown";
+  const char* firmware_env_name = "unknown";
   CapabilityBusDescriptor buses[2] = {};
 };
 

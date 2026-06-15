@@ -1,65 +1,64 @@
-# BRIEF.md - Repository Brief
+# BRIEF.md - CSM Repository Brief
 
 ## Current Focus
-This repository is now the integrated HAMT2 CSM/VSM platform workspace.
+This is the standalone CSM board firmware repository.
 
-- CSM board firmware lives at the repository root and `board/`.
-- VSM Qt workstation source lives in `qt/`.
-- Shared binary and architecture contracts live in `shared/` and `docs/architecture/`.
-- GitHub target: `JO-DOHYUN/HAMT2-platform`.
-- Active branch: `codex/baseline-before-vms`.
+- CSM firmware lives at the repository root, `src/`, `include/`, and `board/`.
+- Shared CSM/VSM wire contracts live under `shared/`.
+- VSM/Qt and Android app work must remain in separate repositories.
+- Build and upload from this directory only:
+  `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`.
+
+## Current Uploaded Baseline
+- Board: Arduino Portenta H7 M7 + Mid Carrier ASX00055.
+- Production env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`.
+- Current board identity before this cleanup was read on COM7 as:
+  - `git=4d21a3c9431`
+  - `dirty=1`
+  - `env=portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+  - `BOARD_CAN_IRQ_MODE=0`
+  - `BOARD_MCP2515_SPI_HZ=8000000`
+  - `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`
+- This repository now carries that uploaded source state so future uploads no
+  longer depend on `C:\WORKS\VS\csm_zip_pre_wifi`.
 
 ## CSM Baseline
-- Arduino Portenta H7 M7 + Portenta Mid Carrier ASX00055, PlatformIO, Arduino framework.
-- External MCP2515/TJA1050 lane is `CAN_RX_RAW bus=0` and audited host TX lane.
-- Mid Carrier J4/U2 lane is `CAN_RX_RAW bus=1` and audited host TX lane in `portenta_h7_m7_mid_mcp2515_j4_dual_csm`.
-- USB typed binary stream v1 with CRC16 framing.
-- Host downlink commands: `HOST_CAN_TX_REQUEST`, `HOST_HEARTBEAT`, `HOST_CONTROL_SESSION`.
-- CSM emits `CONTROL_ACK` for board decision and `CAN_TX_RAW` only after actual CAN write success.
-- Voltage raw lane is `ADC_SAMPLE`, not fake CAN.
-
-## VSM Baseline
-- VSM Qt/C++ source is now present under `qt/`.
-- VSM live production path is typed evidence stream only.
-- Legacy 20-byte `.bin` remains replay/import compatibility.
-- VSM replay supports both legacy `.bin` and typed capture sessions (`typed_capture_*.typed/capture.stream`).
-- Current Qt verification baseline from the source workspace: Release build passed, `ctest` passed 19/19, startup smoke passed.
+- `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic CAN 2.0 500 kbps.
+- `bus=1`: Mid Carrier J4 CAN1 through onboard U2, Classic CAN 2.0 500 kbps.
+- Live production output is typed transport v1.
+- High-load receive uses `CAN_RX_SEGMENT` while preserving per-frame truth.
+- `CONTROL_ACK` is request evidence only; final CAN write evidence is
+  `CAN_TX_RAW`.
+- `CAPABILITY` exposes firmware identity, bus descriptors, and build settings.
+- `BOARD_HEALTH v4` exposes bus queue/drop, serial backpressure, and MCP drain
+  diagnostics.
 
 ## Canonical Contracts
 - Root routing: `AGENTS.md`
-- CSM scoped rules: `board/AGENTS.md`, `board/BRIEF.md`
-- VSM scoped rules: `qt/AGENTS.md`, `qt/BRIEF.md`
-- Wire contract source of truth: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
-- VSM local shared protocol mirror: `qt/shared/protocol/typed_stream_v1.md`
-- Integration decision input: `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md`
-- VSM completion plan: `qt/docs/COMPLETION_TO_RELEASE_PLAN_KO.md`
-
-## Non-Negotiable Evidence Rule
-The control evidence chain is:
-
-`host intent -> host write -> CONTROL_ACK accept/reject -> actual CAN write -> CAN_TX_RAW audit -> optional feedback CAN_RX_RAW`
-
-`CONTROL_ACK` alone is never final CAN TX success.
+- Board scoped rules: `board/AGENTS.md`, `board/BRIEF.md`
+- Wire contract: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
+- HIL runbook: `board/docs/HIL_RUNBOOK_KO.md`
 
 ## Verification Commands
-CSM firmware:
+Build production firmware:
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm
 ```
 
-VSM Qt:
+Upload production firmware:
 
 ```powershell
-cd qt
-$env:CAN_MONITOR_QT_PREFIX_PATH="C:/Qt/6.10.2/msvc2022_64"
-cmake --preset vs-release-qt6
-cmake --build --preset build-release
-ctest --preset test-release
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm -t upload
+```
+
+Decode board identity after upload:
+
+```powershell
+py -3 pc_tools\verify_typed_stream.py --port COM7 --seconds 4 --max-records 20
 ```
 
 ## Immediate Next Work
-- Verify VSM from the monorepo `qt/` location.
-- Verify active CSM PlatformIO build.
-- Commit and push the integrated CSM/VSM state to GitHub.
-- Continue VSM completion through `qt/docs/COMPLETION_TO_RELEASE_PLAN_KO.md`.
+- Use this repository root for all CSM PlatformIO build/upload work.
+- Keep VSM parser updates in the standalone VSM repository.
+- Do not commit build outputs, captures, archives, or nested app workspaces.

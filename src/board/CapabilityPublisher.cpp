@@ -26,6 +26,18 @@ void write_bus_descriptor(uint8_t* payload, uint8_t offset, const CapabilityBusD
   payload[offset + 19] = bus.isolation_policy;
 }
 
+void write_ascii_field(uint8_t* dst, uint8_t field_len, const char* value) {
+  memset(dst, 0, field_len);
+  if (value == nullptr || field_len == 0) {
+    return;
+  }
+  uint8_t i = 0;
+  while (i + 1 < field_len && value[i] != '\0') {
+    dst[i] = static_cast<uint8_t>(value[i]);
+    ++i;
+  }
+}
+
 }  // namespace
 
 uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
@@ -87,10 +99,17 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
     return kCapabilityV3PayloadLen;
   }
 
-  wr_u32_le(&payload[112], config.stream_feature_flags);
-  wr_u32_le(&payload[116], config.stream_epoch);
-  wr_u32_le(&payload[120], config.record_backlog_size);
-  wr_u32_le(&payload[124], config.replay_chunk_max_raw_bytes);
+  payload[112] = config.firmware_identity_version;
+  payload[113] = config.firmware_dirty ? 1 : 0;
+  payload[114] = config.firmware_irq_mode;
+  payload[115] = 0;
+  wr_u32_le(&payload[116], config.firmware_build_epoch);
+  wr_u32_le(&payload[120], config.firmware_build_id);
+  wr_u32_le(&payload[124], config.mcp_spi_hz);
+  wr_u16_le(&payload[128], config.can_record_drain_budget);
+  wr_u16_le(&payload[130], config.serial_ring_kib);
+  write_ascii_field(&payload[132], kFirmwareGitShaFieldLen, config.firmware_git_sha);
+  write_ascii_field(&payload[144], kFirmwareEnvNameFieldLen, config.firmware_env_name);
 
   return kCapabilityV4PayloadLen;
 }

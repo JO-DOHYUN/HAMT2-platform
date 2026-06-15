@@ -1,17 +1,16 @@
 # AGENTS.md - Repository Router
 
 ## Purpose
-This root file is a routing guide for agents. It does not replace the scoped
-rules under `board/`, `qt/`, or `shared/`. This repository now carries both the
-CSM board firmware and the VSM Qt workstation source.
+This root file is a routing guide for agents working in the standalone CSM
+firmware repository. VSM/Qt and Android app work must live in their own
+repositories, not inside this project folder.
 
 ## Read Order
 1. Read `BRIEF.md` for the current repository-level state.
 2. For CSM firmware work, read `board/AGENTS.md` and `board/BRIEF.md`.
-3. For VMS/Qt work, read `qt/AGENTS.md` and `qt/BRIEF.md`.
-4. For binary records, transport, replay, or cross-project contracts, read
+3. For binary records, transport, replay, or cross-project contracts, read
    `shared/docs/TRANSPORT_AND_RECORDS_KO.md`.
-5. For current integration architecture, read
+4. For current integration architecture, read
    `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as a decision input, then apply it
    through the scoped docs instead of treating it as a replacement prompt.
 
@@ -29,6 +28,9 @@ CSM board firmware and the VSM Qt workstation source.
 - CSM is a typed evidence and control gateway, not a simple USB-CAN bridge.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source
   of truth.
+- Do not create or maintain nested `qt/`, `vsm/`, `android/`, or duplicate
+  `csm/` project workspaces under this CSM repository. Build and upload CSM only
+  from this repository root with PlatformIO.
 - Bus labels are profile/capability-driven. The final Mid Carrier dual CSM env
   uses external MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1` for typed
   RX and audited control TX. The earlier dual-internal CAN0/CAN1 + TJA1051
@@ -40,6 +42,5 @@ CSM board firmware and the VSM Qt workstation source.
   in the same change.
 - If MCP behavior changes, preserve MCP `bus=0`, keep bus role/backend exposed
   through `CAPABILITY`, and do not restore the failed MCP falling-edge INT gate.
-- If Qt/VMS behavior changes, keep requested, host write, accepted, sent audit,
-  and feedback as separate states.
-- VSM Qt source lives under `qt/`; build and test Qt work from that directory.
+- If VSM behavior must change, do that in the standalone VSM repository and keep
+  requested, host write, accepted, sent audit, and feedback as separate states.
