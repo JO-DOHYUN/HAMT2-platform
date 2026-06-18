@@ -32,9 +32,9 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
     case 17:  // MCP2515_TX_FAILED
     case 18:  // SAFETY_STATE_CHANGED
     case 22:  // FAULT_LOCKOUT_CLEARED
-    case 24:  // SERIAL_TX_BACKPRESSURE
     case 25:  // SERIAL_TX_RING_CLEAR
       return UplinkPriority::Critical;
+    case 24:  // SERIAL_TX_BACKPRESSURE
     case 9:   // MCP2515_ERROR
     case 10:  // MCP2515_SPI_SNAPSHOT
       return UplinkPriority::Diagnostic;

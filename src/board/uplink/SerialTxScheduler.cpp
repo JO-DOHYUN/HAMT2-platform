@@ -20,7 +20,6 @@ void SerialTxScheduler::begin(uint8_t* ring, uint32_t ring_size,
   head_ = 0;
   tail_ = 0;
   blocked_since_ms_ = 0;
-  last_backpressure_event_ms_ = 0;
   normal_throttle_active_ = false;
   config_ = config;
   counters_ = {};
@@ -80,30 +79,48 @@ void SerialTxScheduler::updateNormalThrottle() {
   }
 }
 
-bool SerialTxScheduler::canEnqueue(uint32_t len, UplinkPriority priority) const {
+SerialTxAdmissionResult SerialTxScheduler::admissionResult(uint32_t len,
+                                                           UplinkPriority priority) const {
   if (!ready() || len > freeBytes()) {
-    return false;
+    return ready() ? SerialTxAdmissionResult::NoSpace : SerialTxAdmissionResult::NotReady;
   }
   if (priority == UplinkPriority::Critical) {
-    return true;
+    return SerialTxAdmissionResult::Accept;
   }
   if (backpressureActive()) {
-    return false;
+    return SerialTxAdmissionResult::BackpressureSuppressed;
   }
   if (normal_throttle_active_) {
-    return false;
+    return SerialTxAdmissionResult::NormalThrottle;
   }
   if (config_.normal_high_water_bytes > 0 &&
       queuedBytes() + len >= config_.normal_high_water_bytes) {
-    return false;
+    return SerialTxAdmissionResult::NormalThrottle;
   }
-  return queuedBytes() + len <= normalLimitBytes();
+  if (queuedBytes() + len > normalLimitBytes()) {
+    return SerialTxAdmissionResult::ReserveProtected;
+  }
+  return SerialTxAdmissionResult::Accept;
+}
+
+bool SerialTxScheduler::canEnqueue(uint32_t len, UplinkPriority priority) const {
+  return admissionResult(len, priority) == SerialTxAdmissionResult::Accept;
 }
 
 void SerialTxScheduler::noteAdmissionFailure(uint32_t len, UplinkPriority priority) {
-  counters_.enqueue_fail_total++;
-  if (ready() && len <= freeBytes() && priority != UplinkPriority::Critical) {
-    counters_.reserve_reject_total++;
+  switch (admissionResult(len, priority)) {
+    case SerialTxAdmissionResult::NotReady:
+    case SerialTxAdmissionResult::NoSpace:
+      counters_.enqueue_fail_total++;
+      break;
+    case SerialTxAdmissionResult::ReserveProtected:
+      counters_.reserve_reject_total++;
+      break;
+    case SerialTxAdmissionResult::BackpressureSuppressed:
+    case SerialTxAdmissionResult::NormalThrottle:
+    case SerialTxAdmissionResult::Accept:
+    default:
+      break;
   }
 }
 
@@ -112,7 +129,11 @@ bool SerialTxScheduler::enqueueAtomic(const uint8_t* data, uint32_t len,
   if (len == 0) {
     return true;
   }
-  if (data == nullptr || !canEnqueue(len, priority)) {
+  if (data == nullptr) {
+    counters_.enqueue_fail_total++;
+    return false;
+  }
+  if (!canEnqueue(len, priority)) {
     noteAdmissionFailure(len, priority);
     return false;
   }
@@ -186,19 +207,12 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
       if (blocked_since_ms_ == 0) {
         blocked_since_ms_ = now_ms;
         counters_.backpressure_total++;
-        result.backpressure_event = true;
-        last_backpressure_event_ms_ = now_ms;
       } else {
         const uint32_t duration = now_ms - blocked_since_ms_;
         if (duration > counters_.backpressure_max_duration_ms) {
           counters_.backpressure_max_duration_ms = duration;
         }
         result.backpressure_duration_ms = duration;
-        if (config_.backpressure_event_period_ms > 0 &&
-            now_ms - last_backpressure_event_ms_ >= config_.backpressure_event_period_ms) {
-          result.backpressure_event = true;
-          last_backpressure_event_ms_ = now_ms;
-        }
       }
       break;
     }
@@ -214,6 +228,8 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
         counters_.backpressure_max_duration_ms = duration;
       }
       blocked_since_ms_ = 0;
+      result.backpressure_event = true;
+      result.backpressure_duration_ms = duration;
     }
 
     if (actual < n) {
@@ -245,7 +261,6 @@ uint32_t SerialTxScheduler::clearDisconnectedStale() {
   head_ = 0;
   tail_ = 0;
   blocked_since_ms_ = 0;
-  last_backpressure_event_ms_ = 0;
   normal_throttle_active_ = false;
   return dropped_bytes;
 }

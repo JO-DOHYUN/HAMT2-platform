@@ -7,6 +7,15 @@
 
 namespace csm::board::uplink {
 
+enum class SerialTxAdmissionResult : uint8_t {
+  Accept = 0,
+  NotReady,
+  NoSpace,
+  ReserveProtected,
+  BackpressureSuppressed,
+  NormalThrottle,
+};
+
 struct SerialTxSchedulerConfig {
   uint32_t critical_reserve_bytes = 0;
   uint32_t drain_time_budget_us = 0;
@@ -14,7 +23,6 @@ struct SerialTxSchedulerConfig {
   uint32_t max_bytes_per_pump = 0;
   uint32_t normal_high_water_bytes = 0;
   uint32_t normal_low_water_bytes = 0;
-  uint32_t backpressure_event_period_ms = 250;
 };
 
 struct SerialTxCounters {
@@ -57,6 +65,7 @@ class SerialTxScheduler {
   bool normalThrottleActive() const;
   bool backpressureActive() const;
 
+  SerialTxAdmissionResult admissionResult(uint32_t len, UplinkPriority priority) const;
   bool canEnqueue(uint32_t len, UplinkPriority priority) const;
   void noteAdmissionFailure(uint32_t len, UplinkPriority priority);
   bool enqueueAtomic(const uint8_t* data, uint32_t len, UplinkPriority priority);
@@ -72,7 +81,6 @@ class SerialTxScheduler {
   uint32_t head_ = 0;
   uint32_t tail_ = 0;
   uint32_t blocked_since_ms_ = 0;
-  uint32_t last_backpressure_event_ms_ = 0;
   SerialTxSchedulerConfig config_;
   SerialTxCounters counters_;
   bool normal_throttle_active_ = false;

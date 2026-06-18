@@ -141,10 +141,6 @@
 #define BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES 32768
 #endif
 
-#ifndef BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS
-#define BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS 250
-#endif
-
 #ifndef BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE
 #define BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE 2
 #endif
@@ -439,6 +435,7 @@ static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
 static volatile uint32_t can_queue_high_water = 0;
 static volatile uint32_t can_segment_enqueue_fail_total = 0;
+static uint32_t pending_can_segment_enqueue_fail_frames = 0;
 static uint32_t host_frame_crc_failed_total = 0;
 static uint32_t host_heartbeat_total = 0;
 static uint32_t host_control_session_total = 0;
@@ -593,7 +590,10 @@ static void note_can_init_retry_failure() {
 }
 
 static void pump_can_rx_to_queue(int budget);
-static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter);
+static bool emit_board_event(uint16_t code, uint16_t detail, uint32_t counter);
+static bool emit_board_event_with_priority(uint16_t code, uint16_t detail, uint32_t counter,
+                                           UplinkPriority priority);
+static void service_deferred_loss_events();
 
 static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
   const csm::board::uplink::SerialTxServiceResult result =
@@ -687,14 +687,45 @@ static void kick_runtime_watchdog() {
 #endif
 }
 
-static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
+static bool emit_board_event_with_priority(uint16_t code, uint16_t detail, uint32_t counter,
+                                           UplinkPriority priority) {
   uint8_t payload[16];
   wr_u64_le(&payload[0], mono64_us());
   wr_u16_le(&payload[8], code);
   wr_u16_le(&payload[10], detail);
   wr_u32_le(&payload[12], counter);
-  emit_record(RecordType::BoardEvent, payload, sizeof(payload),
-              csm::board::uplink::priority_for_board_event(code));
+  return emit_record(RecordType::BoardEvent, payload, sizeof(payload), priority);
+}
+
+static bool emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
+  return emit_board_event_with_priority(
+      code, detail, counter, csm::board::uplink::priority_for_board_event(code));
+}
+
+static void note_pending_can_segment_enqueue_fail(uint32_t frames) {
+  const uint32_t remaining = UINT32_MAX - pending_can_segment_enqueue_fail_frames;
+  pending_can_segment_enqueue_fail_frames += frames > remaining ? remaining : frames;
+}
+
+static void service_deferred_loss_events() {
+  if (pending_can_segment_enqueue_fail_frames == 0 ||
+      serial_tx_scheduler.backpressureActive()) {
+    return;
+  }
+
+  const uint32_t frame_len = static_cast<uint32_t>(csm::encoded_typed_frame_len(16));
+  if (serial_tx_scheduler.freeBytes() < frame_len) {
+    return;
+  }
+
+  const uint16_t detail = pending_can_segment_enqueue_fail_frames > 0xFFFFu
+                              ? 0xFFFFu
+                              : static_cast<uint16_t>(pending_can_segment_enqueue_fail_frames);
+  if (emit_board_event_with_priority(EventSerialTxBackpressure, detail,
+                                     can_segment_enqueue_fail_total,
+                                     UplinkPriority::Critical)) {
+    pending_can_segment_enqueue_fail_frames = 0;
+  }
 }
 
 using csm::ControlAckAccepted;
@@ -1191,7 +1222,7 @@ static bool emit_can_rx_segment_payload(const CanRxItem* items, uint8_t count, u
   }
 
   can_segment_enqueue_fail_total += count;
-  emit_board_event(EventSerialTxBackpressure, count, can_segment_enqueue_fail_total);
+  note_pending_can_segment_enqueue_fail(count);
   return false;
 }
 
@@ -2553,7 +2584,6 @@ void setup() {
   serial_tx_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
   serial_tx_config.normal_high_water_bytes = BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES;
   serial_tx_config.normal_low_water_bytes = BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
-  serial_tx_config.backpressure_event_period_ms = BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS;
   serial_tx_scheduler.begin(serial_tx_ring, kSerialTxRingSize, serial_tx_config);
   uplink_scheduler.begin(&serial_tx_scheduler);
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
@@ -2613,6 +2643,7 @@ void loop() {
     pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
   }
   service_serial_tx(1024);
+  service_deferred_loss_events();
   service_host_downlink(256);
   update_safety_state();
   toggle_safety_watchdog_if_needed();
@@ -2656,6 +2687,7 @@ void loop() {
     last_health_ms = now_ms;
   }
   service_serial_tx(1024);
+  service_deferred_loss_events();
   service_usb_cdc_reconnect_watchdog();
   kick_runtime_watchdog();
 }

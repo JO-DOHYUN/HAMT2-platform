@@ -236,7 +236,10 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `22` fault lockout cleared
 - `23` firmware identity boot marker. `detail low byte` is identity payload
   version, `detail high byte` is dirty flag, `counter` is firmware build id.
-- `24` serial TX backpressure observed
+- `24` serial TX backpressure recovered or deferred TX loss accounting.
+  `detail` is duration ms for recovered CDC backpressure, or a capped pending
+  frame count for deferred CAN segment loss accounting. `counter` is the
+  relevant total counter.
 - `25` serial TX ring clear. `detail` is clear reason and `counter` is dropped
   queued byte count.
 
@@ -245,8 +248,13 @@ Serial CDC uplink policy:
 - Production dual CSM requests CDC sends in 512-byte chunks, with each pump
   bounded by a maximum of two write attempts, 1024 requested bytes, and a
   firmware time budget.
-- `BOARD_EVENT` code `24` means CDC send backpressure was observed and is
-  rate-limited diagnostic evidence.
+- `BOARD_EVENT` code `24` is not emitted repeatedly while CDC remains blocked.
+  Ordinary CDC backpressure is reported as diagnostic evidence after recovery;
+  explicit loss accounting may be deferred and emitted once with critical
+  priority after the ring can accept it.
+- Admission suppression caused by CDC backpressure or normal high-water
+  throttling is policy drop, not a serial enqueue failure. Serial enqueue
+  failure counters are reserved for not-ready/no-space/hard admission failures.
 - `BOARD_EVENT` code `25` means bytes were actually discarded from the TX ring.
   It must only be emitted for real stale-byte discard paths such as disconnect
   handling, and `counter` must be the discarded byte count.
