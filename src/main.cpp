@@ -114,15 +114,31 @@
 #endif
 
 #ifndef BOARD_SERIAL_TX_CHUNK_BYTES
-#define BOARD_SERIAL_TX_CHUNK_BYTES 128
+#define BOARD_SERIAL_TX_CHUNK_BYTES 512
 #endif
 
 #ifndef BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES
 #define BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES 8192
 #endif
 
+#ifndef BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP
+#define BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP 2
+#endif
+
+#ifndef BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP
+#define BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP 1024
+#endif
+
 #ifndef BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US
 #define BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US 1000
+#endif
+
+#ifndef BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES
+#define BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES 49152
+#endif
+
+#ifndef BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES
+#define BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES 32768
 #endif
 
 #ifndef BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS
@@ -439,6 +455,11 @@ static constexpr uint32_t kSerialTxRingMask = kSerialTxRingSize - 1;
 static_assert((kSerialTxRingSize & kSerialTxRingMask) == 0, "BOARD_SERIAL_TX_RING_SIZE must be a power of two");
 static_assert(BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES < kSerialTxRingSize,
               "BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES must be smaller than BOARD_SERIAL_TX_RING_SIZE");
+static_assert(BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES < BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES,
+              "BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES must be below high water");
+static_assert(BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES <
+              (kSerialTxRingSize - BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES),
+              "BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES must leave critical reserve intact");
 static_assert(csm::encoded_typed_frame_len(kCanRxSegmentHeaderLen +
               kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames) <= 512,
               "CAN_RX_SEGMENT typed frame must fit within one 512-byte USB HS packet");
@@ -574,7 +595,7 @@ static void note_can_init_retry_failure() {
 static void pump_can_rx_to_queue(int budget);
 static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter);
 
-static void service_serial_tx(uint32_t byte_budget = 512) {
+static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
   const csm::board::uplink::SerialTxServiceResult result =
       serial_tx_scheduler.service(byte_budget, millis(), micros());
   if (result.backpressure_event) {
@@ -2528,6 +2549,10 @@ void setup() {
   csm::board::uplink::SerialTxSchedulerConfig serial_tx_config;
   serial_tx_config.critical_reserve_bytes = BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES;
   serial_tx_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
+  serial_tx_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
+  serial_tx_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
+  serial_tx_config.normal_high_water_bytes = BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES;
+  serial_tx_config.normal_low_water_bytes = BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
   serial_tx_config.backpressure_event_period_ms = BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS;
   serial_tx_scheduler.begin(serial_tx_ring, kSerialTxRingSize, serial_tx_config);
   uplink_scheduler.begin(&serial_tx_scheduler);
@@ -2587,7 +2612,7 @@ void loop() {
   if (!kTestMode && can_backend_ok) {
     pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
   }
-  service_serial_tx(512);
+  service_serial_tx(1024);
   service_host_downlink(256);
   update_safety_state();
   toggle_safety_watchdog_if_needed();

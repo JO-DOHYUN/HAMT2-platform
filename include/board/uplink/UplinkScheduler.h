@@ -11,6 +11,9 @@ struct UplinkCounters {
   uint32_t record_tx_total = 0;
   uint32_t record_drop_total = 0;
   uint32_t record_encode_fail_total = 0;
+  uint32_t critical_drop_total = 0;
+  uint32_t normal_drop_total = 0;
+  uint32_t diagnostic_drop_total = 0;
 };
 
 class UplinkScheduler {

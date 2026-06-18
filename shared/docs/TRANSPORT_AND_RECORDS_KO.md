@@ -242,6 +242,9 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear the software TX ring.
+- Production dual CSM requests CDC sends in 512-byte chunks, with each pump
+  bounded by a maximum of two write attempts, 1024 requested bytes, and a
+  firmware time budget.
 - `BOARD_EVENT` code `24` means CDC send backpressure was observed and is
   rate-limited diagnostic evidence.
 - `BOARD_EVENT` code `25` means bytes were actually discarded from the TX ring.
@@ -255,6 +258,9 @@ Serial CDC uplink policy:
 - Production CSM keeps an 8 KiB critical reserve inside the 64 KiB TX ring.
   Normal/diagnostic records may only use the normal region; critical evidence
   may use the reserve.
+- Normal/diagnostic admission is also gated by a high/low watermark hysteresis
+  so low-value records stop entering the ring before the critical reserve is
+  threatened.
 - Critical reserve users include `CAN_RX_SEGMENT`, `CONTROL_ACK`, `CAN_TX_RAW`,
   fault/safety transitions, and explicit loss accounting.
 - Diagnostic records include debug, profiler, repeated MCP status/error, and

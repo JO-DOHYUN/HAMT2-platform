@@ -7,7 +7,7 @@
 #endif
 
 #ifndef BOARD_SERIAL_TX_CHUNK_BYTES
-#define BOARD_SERIAL_TX_CHUNK_BYTES 128
+#define BOARD_SERIAL_TX_CHUNK_BYTES 512
 #endif
 
 namespace csm::board::uplink {
@@ -21,6 +21,7 @@ void SerialTxScheduler::begin(uint8_t* ring, uint32_t ring_size,
   tail_ = 0;
   blocked_since_ms_ = 0;
   last_backpressure_event_ms_ = 0;
+  normal_throttle_active_ = false;
   config_ = config;
   counters_ = {};
 }
@@ -55,12 +56,46 @@ uint32_t SerialTxScheduler::normalLimitBytes() const {
   return capacity - config_.critical_reserve_bytes;
 }
 
+bool SerialTxScheduler::normalThrottleActive() const {
+  return normal_throttle_active_;
+}
+
+bool SerialTxScheduler::backpressureActive() const {
+  return blocked_since_ms_ != 0;
+}
+
+void SerialTxScheduler::updateNormalThrottle() {
+  const uint32_t queued = queuedBytes();
+  const uint32_t high = config_.normal_high_water_bytes;
+  const uint32_t low = config_.normal_low_water_bytes;
+  if (high == 0) {
+    normal_throttle_active_ = false;
+    return;
+  }
+  if (!normal_throttle_active_ && queued >= high) {
+    normal_throttle_active_ = true;
+    counters_.normal_throttle_total++;
+  } else if (normal_throttle_active_ && queued <= low) {
+    normal_throttle_active_ = false;
+  }
+}
+
 bool SerialTxScheduler::canEnqueue(uint32_t len, UplinkPriority priority) const {
   if (!ready() || len > freeBytes()) {
     return false;
   }
   if (priority == UplinkPriority::Critical) {
     return true;
+  }
+  if (backpressureActive()) {
+    return false;
+  }
+  if (normal_throttle_active_) {
+    return false;
+  }
+  if (config_.normal_high_water_bytes > 0 &&
+      queuedBytes() + len >= config_.normal_high_water_bytes) {
+    return false;
   }
   return queuedBytes() + len <= normalLimitBytes();
 }
@@ -90,6 +125,7 @@ bool SerialTxScheduler::enqueueAtomic(const uint8_t* data, uint32_t len,
   if (queued > counters_.high_water_bytes) {
     counters_.high_water_bytes = queued;
   }
+  updateNormalThrottle();
   return true;
 }
 
@@ -108,15 +144,23 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
 
 #if defined(SERIAL_CDC)
   const uint32_t start_us = now_us;
+  const uint32_t configured_bytes = config_.max_bytes_per_pump == 0
+                                        ? byte_budget
+                                        : config_.max_bytes_per_pump;
+  uint32_t remaining_budget = byte_budget < configured_bytes ? byte_budget : configured_bytes;
+  const uint32_t max_writes = config_.max_writes_per_pump == 0
+                                  ? 0xFFFFFFFFu
+                                  : config_.max_writes_per_pump;
+  uint32_t writes = 0;
   uint8_t chunk[BOARD_SERIAL_TX_CHUNK_BYTES];
-  while (byte_budget > 0 && tail_ != head_) {
+  while (remaining_budget > 0 && writes < max_writes && tail_ != head_) {
     if (config_.drain_time_budget_us > 0 &&
         static_cast<uint32_t>(micros() - start_us) >= config_.drain_time_budget_us) {
       break;
     }
 
     uint32_t n = 0;
-    while (n < sizeof(chunk) && n < byte_budget && tail_ != head_) {
+    while (n < sizeof(chunk) && n < remaining_budget && tail_ != head_) {
       chunk[n++] = ring_[tail_];
       tail_ = (tail_ + 1) & mask_;
     }
@@ -126,6 +170,9 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
 
     uint32_t actual = 0;
     _SerialUSB.send_nb(chunk, n, &actual, true);
+    writes++;
+    counters_.write_attempt_total++;
+    result.writes_attempted++;
     counters_.last_requested_bytes = n;
     counters_.last_actual_bytes = actual;
     counters_.requested_bytes_total += n;
@@ -156,6 +203,11 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
       break;
     }
 
+    if (actual == n) {
+      counters_.write_complete_total++;
+      result.writes_completed++;
+    }
+
     if (blocked_since_ms_ != 0) {
       const uint32_t duration = now_ms - blocked_since_ms_;
       if (duration > counters_.backpressure_max_duration_ms) {
@@ -166,9 +218,15 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
 
     if (actual < n) {
       rewindTail(n - actual);
+      if (actual > 0) {
+        updateNormalThrottle();
+      }
+      counters_.partial_write_total++;
+      result.partial_writes++;
       break;
     }
-    byte_budget -= actual;
+    remaining_budget -= actual;
+    updateNormalThrottle();
   }
 #else
   (void)byte_budget;
@@ -188,6 +246,7 @@ uint32_t SerialTxScheduler::clearDisconnectedStale() {
   tail_ = 0;
   blocked_since_ms_ = 0;
   last_backpressure_event_ms_ = 0;
+  normal_throttle_active_ = false;
   return dropped_bytes;
 }
 
