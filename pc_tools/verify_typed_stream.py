@@ -400,6 +400,87 @@ def describe(frame):
     return f"[{name}] seq={seq} len={len(payload)} payload={payload.hex(' ')}"
 
 
+class GapTracker:
+    def __init__(self):
+        self.last_typed_seq = None
+        self.typed_seq_gaps = 0
+        self.last_segment_seq = None
+        self.segment_seq_gaps = 0
+        self.last_capture_seq = None
+        self.capture_seq_gaps = 0
+        self.last_health = {}
+
+    @staticmethod
+    def _seq16_gap(prev: int, cur: int) -> int:
+        expected = (prev + 1) & 0xFFFF
+        if cur == expected:
+            return 0
+        return (cur - expected) & 0xFFFF
+
+    def observe(self, frame):
+        if frame.get("bad_crc"):
+            return
+
+        seq = frame["seq"]
+        if self.last_typed_seq is not None:
+            self.typed_seq_gaps += self._seq16_gap(self.last_typed_seq, seq)
+        self.last_typed_seq = seq
+
+        rtype = frame["type"]
+        payload = frame["payload"]
+        if rtype == 16 and len(payload) >= 32:
+            segment_seq = u64(payload, 0)
+            if self.last_segment_seq is not None and segment_seq != self.last_segment_seq + 1:
+                self.segment_seq_gaps += max(0, segment_seq - self.last_segment_seq - 1)
+            self.last_segment_seq = segment_seq
+
+            frame_count = u16(payload, 16)
+            entry_size = payload[18]
+            if entry_size >= 30 and len(payload) >= 32 + frame_count * entry_size:
+                for index in range(frame_count):
+                    offset = 32 + index * entry_size
+                    capture_seq = u64(payload, offset)
+                    if self.last_capture_seq is not None and capture_seq != self.last_capture_seq + 1:
+                        self.capture_seq_gaps += max(0, capture_seq - self.last_capture_seq - 1)
+                    self.last_capture_seq = capture_seq
+
+        if rtype == 8 and len(payload) >= 192 and payload[52] == 4:
+            self.last_health = {
+                "serial_enqueue_fail": u32(payload, 160),
+                "serial_clear": u32(payload, 164),
+                "serial_clear_bytes": u32(payload, 168),
+                "serial_backpressure": u32(payload, 172),
+                "serial_high_bytes": u32(payload, 176),
+                "can_q_high": u32(payload, 180),
+                "mcp_drain_budget_hit": u32(payload, 184),
+                "segment_enqueue_fail": u32(payload, 188),
+                "can_rx_dropped_total": u32(payload, 12),
+                "can_fifo_overflow_total": u32(payload, 16),
+            }
+
+    def summary(self) -> str:
+        parts = [
+            f"typed_seq_gaps={self.typed_seq_gaps}",
+            f"segment_seq_gaps={self.segment_seq_gaps}",
+            f"capture_seq_gaps={self.capture_seq_gaps}",
+        ]
+        for key in (
+            "serial_clear",
+            "serial_clear_bytes",
+            "serial_backpressure",
+            "serial_high_bytes",
+            "serial_enqueue_fail",
+            "segment_enqueue_fail",
+            "can_rx_dropped_total",
+            "can_fifo_overflow_total",
+            "can_q_high",
+            "mcp_drain_budget_hit",
+        ):
+            if key in self.last_health:
+                parts.append(f"{key}={self.last_health[key]}")
+        return "[SUMMARY] " + " ".join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Decode Portenta typed record stream.")
     parser.add_argument("--port", default="COM6")
@@ -415,24 +496,31 @@ def main():
     buf = bytearray()
     last_can_print = 0.0
     printed = 0
+    tracker = GapTracker()
     deadline = time.time() + args.seconds if args.seconds > 0 else None
-    while True:
-        if deadline is not None and time.time() >= deadline:
-            break
-        buf += ser.read(4096)
+    try:
         while True:
-            frame = parse_frame(buf)
-            if frame is None:
+            if deadline is not None and time.time() >= deadline:
                 break
-            if frame.get("type") == 1 and not args.raw:
-                now = time.time()
-                if now - last_can_print < 0.5:
-                    continue
-                last_can_print = now
-            print(describe(frame))
-            printed += 1
-            if args.max_records > 0 and printed >= args.max_records:
-                return
+            buf += ser.read(4096)
+            while True:
+                frame = parse_frame(buf)
+                if frame is None:
+                    break
+                tracker.observe(frame)
+                if frame.get("type") == 1 and not args.raw:
+                    now = time.time()
+                    if now - last_can_print < 0.5:
+                        continue
+                    last_can_print = now
+                print(describe(frame))
+                printed += 1
+                if args.max_records > 0 and printed >= args.max_records:
+                    raise StopIteration
+    except (KeyboardInterrupt, StopIteration):
+        pass
+    finally:
+        print(tracker.summary())
 
 
 if __name__ == "__main__":

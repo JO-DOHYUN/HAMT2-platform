@@ -65,24 +65,28 @@ uint64_t mono64_us() {
   return high | now;
 }
 
-bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
-                       uint16_t len, uint16_t& seq, uint8_t flags) {
-  if (len > kMaxPayloadLen) {
+bool encode_typed_frame(uint8_t* frame, size_t capacity, RecordType type,
+                        const uint8_t* payload, uint16_t len, uint16_t seq,
+                        uint8_t flags, size_t* written) {
+  if (frame == nullptr || len > kMaxPayloadLen || (len > 0 && payload == nullptr)) {
+    return false;
+  }
+  const size_t frame_len = encoded_typed_frame_len(len);
+  if (capacity < frame_len) {
     return false;
   }
 
-  uint8_t frame[2 + 1 + 1 + 1 + 2 + 2 + kMaxPayloadLen + 2];
   size_t pos = 0;
   frame[pos++] = kFrameSof0;
   frame[pos++] = kFrameSof1;
   frame[pos++] = kProtocolVersion;
   frame[pos++] = static_cast<uint8_t>(type);
   frame[pos++] = flags;
-  wr_u16_le(&frame[pos], seq++);
+  wr_u16_le(&frame[pos], seq);
   pos += 2;
   wr_u16_le(&frame[pos], len);
   pos += 2;
-  if (len > 0 && payload != nullptr) {
+  if (len > 0) {
     memcpy(&frame[pos], payload, len);
     pos += len;
   }
@@ -91,9 +95,27 @@ bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
   wr_u16_le(&frame[pos], crc);
   pos += 2;
 
+  if (written != nullptr) {
+    *written = pos;
+  }
+  return true;
+}
+
+bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
+                       uint16_t len, uint16_t& seq, uint8_t flags) {
+  if (len > kMaxPayloadLen) {
+    return false;
+  }
+
+  uint8_t frame[2 + 1 + 1 + 1 + 2 + 2 + kMaxPayloadLen + 2];
+  size_t pos = 0;
+  if (!encode_typed_frame(frame, sizeof(frame), type, payload, len, seq, flags, &pos)) {
+    return false;
+  }
+  seq++;
+
   serial.write(frame, pos);
   return true;
 }
 
 }  // namespace csm
-

@@ -10,6 +10,10 @@
 #include "board/HostDownlinkParser.h"
 #include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
+#include "board/uplink/CanRxSegmentBuilder.h"
+#include "board/uplink/SerialTxScheduler.h"
+#include "board/uplink/UplinkPriorityPolicy.h"
+#include "board/uplink/UplinkScheduler.h"
 #include "protocol/HostCommands.h"
 #include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
@@ -111,6 +115,18 @@
 
 #ifndef BOARD_SERIAL_TX_CHUNK_BYTES
 #define BOARD_SERIAL_TX_CHUNK_BYTES 128
+#endif
+
+#ifndef BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES
+#define BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES 8192
+#endif
+
+#ifndef BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US
+#define BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US 1000
+#endif
+
+#ifndef BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS
+#define BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS 250
 #endif
 
 #ifndef BOARD_CAN_RECORDS_BEFORE_MCP_SERVICE
@@ -324,6 +340,11 @@ using csm::wr_i64_le;
 using csm::wr_u16_le;
 using csm::wr_u32_le;
 using csm::wr_u64_le;
+using csm::board::uplink::CanRxSegmentBuilder;
+using csm::board::uplink::CanRxSegmentItem;
+using csm::board::uplink::SerialTxScheduler;
+using csm::board::uplink::UplinkPriority;
+using csm::board::uplink::UplinkScheduler;
 
 using SafetyState = csm::board::SafetyState;
 
@@ -355,14 +376,7 @@ enum BoardEventCode : uint16_t {
   EventSerialTxRingClear = 25,
 };
 
-struct CanRxItem {
-  uint64_t capture_seq;
-  uint64_t mono_us;
-  uint32_t can_id_flags;
-  uint8_t dlc_flags;
-  uint8_t bus;
-  uint8_t data[8];
-};
+using CanRxItem = CanRxSegmentItem;
 
 struct EncoderSnapshot {
   uint64_t mono_us;
@@ -401,25 +415,14 @@ static CanRxItem can_queue_bus1[kCanQueueSize];
 static volatile uint32_t can_q_head[2] = {0, 0};
 static volatile uint32_t can_q_tail[2] = {0, 0};
 static BusRxRuntime can_bus_runtime[2] = {};
-static CanRxItem can_rx_segment_pending[kCanRxSegmentMaxFrames];
-static uint8_t can_rx_segment_pending_count = 0;
-static uint32_t can_rx_segment_first_us = 0;
 
 static uint64_t can_capture_seq_next = 0;
-static uint64_t can_rx_segment_seq_next = 0;
 static uint8_t can_queue_pop_next_index = 0;
 static volatile uint32_t can_rx_count_total = 0;
 static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
 static volatile uint32_t can_queue_high_water = 0;
 static volatile uint32_t can_segment_enqueue_fail_total = 0;
-static volatile uint32_t serial_record_tx_total = 0;
-static volatile uint32_t serial_record_drop_total = 0;
-static volatile uint32_t serial_tx_enqueue_fail_total = 0;
-static volatile uint32_t serial_tx_ring_clear_total = 0;
-static volatile uint32_t serial_tx_ring_cleared_bytes_total = 0;
-static volatile uint32_t serial_tx_backpressure_total = 0;
-static volatile uint32_t serial_tx_high_water_bytes = 0;
 static uint32_t host_frame_crc_failed_total = 0;
 static uint32_t host_heartbeat_total = 0;
 static uint32_t host_control_session_total = 0;
@@ -431,14 +434,18 @@ static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
 static volatile uint32_t encoder_index_count = 0;
 
-static uint16_t transport_seq = 0;
 static constexpr uint32_t kSerialTxRingSize = BOARD_SERIAL_TX_RING_SIZE;
 static constexpr uint32_t kSerialTxRingMask = kSerialTxRingSize - 1;
 static_assert((kSerialTxRingSize & kSerialTxRingMask) == 0, "BOARD_SERIAL_TX_RING_SIZE must be a power of two");
+static_assert(BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES < kSerialTxRingSize,
+              "BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES must be smaller than BOARD_SERIAL_TX_RING_SIZE");
+static_assert(csm::encoded_typed_frame_len(kCanRxSegmentHeaderLen +
+              kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames) <= 512,
+              "CAN_RX_SEGMENT typed frame must fit within one 512-byte USB HS packet");
 static uint8_t serial_tx_ring[kSerialTxRingSize];
-static uint32_t serial_tx_head = 0;
-static uint32_t serial_tx_tail = 0;
-static uint32_t serial_tx_blocked_since_ms = 0;
+static SerialTxScheduler serial_tx_scheduler;
+static UplinkScheduler uplink_scheduler;
+static CanRxSegmentBuilder can_rx_segment_builder;
 static uint32_t serial_tx_bytes_since_can_service = 0;
 #if BOARD_ENABLE_MCP2515
 static MCP2515* mcp2515 = nullptr;
@@ -564,90 +571,24 @@ static void note_can_init_retry_failure() {
   can_init_retry_delay_ms = next_delay_ms;
 }
 
-static uint32_t serial_tx_queued_bytes() {
-  return (serial_tx_head - serial_tx_tail) & kSerialTxRingMask;
-}
-
-static uint32_t serial_tx_free_bytes() {
-  return (kSerialTxRingSize - 1) - serial_tx_queued_bytes();
-}
-
 static void pump_can_rx_to_queue(int budget);
 static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter);
 
-static uint32_t clear_serial_tx_ring() {
-  const uint32_t dropped_bytes = serial_tx_queued_bytes();
-  if (dropped_bytes > 0) {
-    serial_tx_ring_clear_total++;
-    serial_tx_ring_cleared_bytes_total += dropped_bytes;
-  }
-  serial_tx_head = 0;
-  serial_tx_tail = 0;
-  serial_tx_blocked_since_ms = 0;
-  serial_tx_bytes_since_can_service = 0;
-  return dropped_bytes;
-}
-
-static bool enqueue_serial_tx_bytes(const uint8_t* data, uint32_t len) {
-  if (len == 0) return true;
-  if (data == nullptr || len > serial_tx_free_bytes()) return false;
-  for (uint32_t i = 0; i < len; ++i) {
-    serial_tx_ring[serial_tx_head] = data[i];
-    serial_tx_head = (serial_tx_head + 1) & kSerialTxRingMask;
-  }
-  const uint32_t queued = serial_tx_queued_bytes();
-  if (queued > serial_tx_high_water_bytes) {
-    serial_tx_high_water_bytes = queued;
-  }
-  return true;
-}
-
 static void service_serial_tx(uint32_t byte_budget = 512) {
-#if defined(SERIAL_CDC)
-  uint8_t chunk[BOARD_SERIAL_TX_CHUNK_BYTES];
-  while (byte_budget > 0 && serial_tx_tail != serial_tx_head) {
-    uint32_t n = 0;
-    while (n < sizeof(chunk) && n < byte_budget && serial_tx_tail != serial_tx_head) {
-      chunk[n++] = serial_tx_ring[serial_tx_tail];
-      serial_tx_tail = (serial_tx_tail + 1) & kSerialTxRingMask;
-    }
-    if (n == 0) break;
-
-    uint32_t actual = 0;
-    _SerialUSB.send_nb(chunk, n, &actual, true);
-    if (actual == 0) {
-      for (uint32_t i = actual; i < n; ++i) {
-        serial_tx_tail = (serial_tx_tail - 1) & kSerialTxRingMask;
-      }
-      const uint32_t now_ms = millis();
-      if (serial_tx_blocked_since_ms == 0) {
-        serial_tx_blocked_since_ms = now_ms;
-      } else if (now_ms - serial_tx_blocked_since_ms > 250) {
-        serial_tx_backpressure_total++;
-        const uint32_t dropped_bytes = clear_serial_tx_ring();
-        emit_board_event(EventSerialTxRingClear, 1, dropped_bytes);
-      }
-      break;
-    }
-    serial_tx_blocked_since_ms = 0;
-    if (actual < n) {
-      for (uint32_t i = actual; i < n; ++i) {
-        serial_tx_tail = (serial_tx_tail - 1) & kSerialTxRingMask;
-      }
-      break;
-    }
-    byte_budget -= actual;
-    serial_tx_bytes_since_can_service += actual;
-    if (serial_tx_bytes_since_can_service >= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES) {
-      serial_tx_bytes_since_can_service = 0;
-      if (!kTestMode) {
-        pump_can_rx_to_queue(BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET);
-      }
+  const csm::board::uplink::SerialTxServiceResult result =
+      serial_tx_scheduler.service(byte_budget, millis(), micros());
+  if (result.backpressure_event) {
+    emit_board_event(EventSerialTxBackpressure,
+                     static_cast<uint16_t>(result.backpressure_duration_ms & 0xFFFF),
+                     serial_tx_scheduler.counters().backpressure_total);
+  }
+  serial_tx_bytes_since_can_service += result.actual_bytes;
+  while (serial_tx_bytes_since_can_service >= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES) {
+    serial_tx_bytes_since_can_service -= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES;
+    if (!kTestMode) {
+      pump_can_rx_to_queue(BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET);
     }
   }
-#else
-  (void)byte_budget;
-#endif
 }
 
 static void service_usb_cdc_reconnect_watchdog() {
@@ -666,7 +607,10 @@ static void service_usb_cdc_reconnect_watchdog() {
   const uint32_t now_ms = millis();
   if (usb_disconnected_since_ms == 0) {
     usb_disconnected_since_ms = now_ms;
-    clear_serial_tx_ring();
+    const uint32_t dropped_bytes = serial_tx_scheduler.clearDisconnectedStale();
+    if (dropped_bytes > 0) {
+      emit_board_event(EventSerialTxRingClear, 2, dropped_bytes);
+    }
     return;
   }
 
@@ -677,49 +621,24 @@ static void service_usb_cdc_reconnect_watchdog() {
 #endif
 }
 
-static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16_t len, uint8_t flags = 0) {
-  if (len > kMaxPayloadLen) {
-    return false;
-  }
-
+static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16_t len,
+                                 UplinkPriority priority, uint8_t flags = 0) {
 #if !defined(SERIAL_CDC)
-  return csm::emit_typed_record(Serial, type, payload, len, transport_seq, flags);
+  static uint16_t serial_transport_seq = 0;
+  return csm::emit_typed_record(Serial, type, payload, len, serial_transport_seq, flags);
 #else
-  uint8_t frame[2 + 1 + 1 + 1 + 2 + 2 + kMaxPayloadLen + 2];
-  size_t pos = 0;
-  frame[pos++] = kFrameSof0;
-  frame[pos++] = kFrameSof1;
-  frame[pos++] = kProtocolVersion;
-  frame[pos++] = static_cast<uint8_t>(type);
-  frame[pos++] = flags;
-  wr_u16_le(&frame[pos], transport_seq++);
-  pos += 2;
-  wr_u16_le(&frame[pos], len);
-  pos += 2;
-  if (len > 0 && payload != nullptr) {
-    memcpy(&frame[pos], payload, len);
-    pos += len;
-  }
-
-  const uint16_t crc = crc16_ccitt(&frame[2], pos - 2);
-  wr_u16_le(&frame[pos], crc);
-  pos += 2;
-
-  if (!enqueue_serial_tx_bytes(frame, static_cast<uint32_t>(pos))) {
-    return false;
-  }
-  service_serial_tx(512);
-  return true;
+  return uplink_scheduler.enqueueRecord(type, payload, len, priority, flags);
 #endif
 }
 
-static void emit_record(RecordType type, const uint8_t* payload, uint16_t len, uint8_t flags = 0) {
-  if (enqueue_typed_record(type, payload, len, flags)) {
-    serial_record_tx_total++;
-  } else {
-    serial_record_drop_total++;
-    serial_tx_enqueue_fail_total++;
-  }
+static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
+                        UplinkPriority priority, uint8_t flags = 0) {
+  return enqueue_typed_record(type, payload, len, priority, flags);
+}
+
+static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
+                        uint8_t flags = 0) {
+  return emit_record(type, payload, len, csm::board::uplink::default_priority_for_record(type), flags);
 }
 
 #if BOARD_ENABLE_STATUS_LED
@@ -753,7 +672,8 @@ static void emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
   wr_u16_le(&payload[8], code);
   wr_u16_le(&payload[10], detail);
   wr_u32_le(&payload[12], counter);
-  emit_record(RecordType::BoardEvent, payload, sizeof(payload));
+  emit_record(RecordType::BoardEvent, payload, sizeof(payload),
+              csm::board::uplink::priority_for_board_event(code));
 }
 
 using csm::ControlAckAccepted;
@@ -1215,7 +1135,7 @@ static void __attribute__((unused)) emit_can_rx_raw(const CanRxItem& item) {
   emit_record(RecordType::CanRxRaw, payload, sizeof(payload));
 }
 
-static bool emit_can_rx_segment(const CanRxItem* items, uint8_t count) {
+static bool emit_can_rx_segment_payload(const CanRxItem* items, uint8_t count, uint64_t segment_seq) {
   if (items == nullptr || count == 0) {
     return true;
   }
@@ -1225,7 +1145,7 @@ static bool emit_can_rx_segment(const CanRxItem* items, uint8_t count) {
 
   uint8_t payload[kCanRxSegmentHeaderLen + kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames];
   memset(payload, 0, sizeof(payload));
-  wr_u64_le(&payload[0], can_rx_segment_seq_next++);
+  wr_u64_le(&payload[0], segment_seq);
   wr_u64_le(&payload[8], items[0].capture_seq);
   wr_u16_le(&payload[16], count);
   payload[18] = kCanRxSegmentEntryLen;
@@ -1245,16 +1165,18 @@ static bool emit_can_rx_segment(const CanRxItem* items, uint8_t count) {
   }
 
   const uint16_t payload_len = static_cast<uint16_t>(kCanRxSegmentHeaderLen + count * kCanRxSegmentEntryLen);
-  if (enqueue_typed_record(RecordType::CanRxSegment, payload, payload_len)) {
-    serial_record_tx_total++;
+  if (enqueue_typed_record(RecordType::CanRxSegment, payload, payload_len, UplinkPriority::Critical)) {
     return true;
   }
 
-  serial_record_drop_total++;
-  serial_tx_enqueue_fail_total++;
   can_segment_enqueue_fail_total += count;
   emit_board_event(EventSerialTxBackpressure, count, can_segment_enqueue_fail_total);
   return false;
+}
+
+static bool emit_can_rx_segment_callback(void*, const CanRxSegmentItem* items,
+                                         uint8_t count, uint64_t segment_seq) {
+  return emit_can_rx_segment_payload(items, count, segment_seq);
 }
 
 static void __attribute__((unused)) emit_can_tx_raw(uint8_t bus, uint32_t can_id_flags, uint8_t dlc,
@@ -1278,6 +1200,8 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   const uint32_t queued0 = (can_q_head[0] - can_q_tail[0]) & kCanQueueMask;
   const uint32_t queued1 = (can_q_head[1] - can_q_tail[1]) & kCanQueueMask;
   const uint32_t queued = queued0 + queued1;
+  const csm::board::uplink::UplinkCounters& uplink_counters = uplink_scheduler.counters();
+  const csm::board::uplink::SerialTxCounters& serial_counters = serial_tx_scheduler.counters();
 
   uint8_t inputs = 0;
 #if BOARD_ENABLE_SAFETY_IO
@@ -1293,7 +1217,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[8], can_rx_count_total);
   wr_u32_le(&payload[12], can_rx_dropped_total);
   wr_u32_le(&payload[16], can_fifo_overflow_total);
-  wr_u32_le(&payload[20], serial_record_tx_total);
+  wr_u32_le(&payload[20], uplink_counters.record_tx_total);
   wr_u32_le(&payload[24], queued);
   wr_u32_le(&payload[28], encoder_fault_events);
   wr_u32_le(&payload[32], encoder_wrap_events);
@@ -1314,8 +1238,8 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 #if BOARD_ENABLE_VOLTAGE_ADC
   payload[47] |= voltage_adc_ok ? (1u << 5) : 0;
 #endif
-  payload[47] |= serial_tx_queued_bytes() > 0 ? (1u << 6) : 0;
-  payload[47] |= serial_record_drop_total > 0 ? (1u << 7) : 0;
+  payload[47] |= serial_tx_scheduler.queuedBytes() > 0 ? (1u << 6) : 0;
+  payload[47] |= uplink_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
   payload[52] = 4;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
@@ -1361,11 +1285,11 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[148], can_bus_runtime[1].drop_total);
   wr_u32_le(&payload[152], can_bus_runtime[1].queued);
   wr_u32_le(&payload[156], can_bus_runtime[1].high_water);
-  wr_u32_le(&payload[160], serial_tx_enqueue_fail_total);
-  wr_u32_le(&payload[164], serial_tx_ring_clear_total);
-  wr_u32_le(&payload[168], serial_tx_ring_cleared_bytes_total);
-  wr_u32_le(&payload[172], serial_tx_backpressure_total);
-  wr_u32_le(&payload[176], serial_tx_high_water_bytes);
+  wr_u32_le(&payload[160], serial_counters.enqueue_fail_total);
+  wr_u32_le(&payload[164], serial_counters.ring_clear_total);
+  wr_u32_le(&payload[168], serial_counters.ring_cleared_bytes_total);
+  wr_u32_le(&payload[172], serial_counters.backpressure_total);
+  wr_u32_le(&payload[176], serial_counters.high_water_bytes);
   wr_u32_le(&payload[180], can_queue_high_water);
 #if BOARD_ENABLE_MCP2515
   wr_u32_le(&payload[184], mcp_service.drain_time_budget_hit_total);
@@ -2535,21 +2459,8 @@ static void drain_can_records(int budget) {
   CanRxItem item;
   int records_since_mcp_service = 0;
   const uint32_t start_us = micros();
-  auto flush_pending_segment = [&]() -> bool {
-    if (can_rx_segment_pending_count == 0) {
-      return true;
-    }
-    const bool ok = emit_can_rx_segment(can_rx_segment_pending, can_rx_segment_pending_count);
-    can_rx_segment_pending_count = 0;
-    can_rx_segment_first_us = 0;
-    return ok;
-  };
-  auto segment_age_due = [&]() -> bool {
-    return can_rx_segment_pending_count > 0 &&
-           static_cast<uint32_t>(micros() - can_rx_segment_first_us) >= BOARD_CAN_RX_SEGMENT_FLUSH_US;
-  };
 
-  if (segment_age_due() && !flush_pending_segment()) {
+  if (!can_rx_segment_builder.flushIfDue(start_us)) {
     return;
   }
 
@@ -2560,11 +2471,7 @@ static void drain_can_records(int budget) {
     if (!can_queue_pop(item)) {
       break;
     }
-    if (can_rx_segment_pending_count == 0) {
-      can_rx_segment_first_us = micros();
-    }
-    can_rx_segment_pending[can_rx_segment_pending_count++] = item;
-    if (can_rx_segment_pending_count >= kCanRxSegmentMaxFrames && !flush_pending_segment()) {
+    if (!can_rx_segment_builder.push(item, micros())) {
       break;
     }
     ++records_since_mcp_service;
@@ -2575,9 +2482,7 @@ static void drain_can_records(int budget) {
       }
     }
   }
-  if (segment_age_due()) {
-    flush_pending_segment();
-  }
+  can_rx_segment_builder.flushIfDue(micros());
 }
 
 static void service_encoder() {
@@ -2619,6 +2524,14 @@ void setup() {
   while (!Serial && (millis() - start_ms) < 1500) {
     kick_runtime_watchdog();
   }
+
+  csm::board::uplink::SerialTxSchedulerConfig serial_tx_config;
+  serial_tx_config.critical_reserve_bytes = BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES;
+  serial_tx_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
+  serial_tx_config.backpressure_event_period_ms = BOARD_SERIAL_TX_BACKPRESSURE_EVENT_PERIOD_MS;
+  serial_tx_scheduler.begin(serial_tx_ring, kSerialTxRingSize, serial_tx_config);
+  uplink_scheduler.begin(&serial_tx_scheduler);
+  can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
 
   init_safety_pins();
   safety_supervisor.begin(millis());

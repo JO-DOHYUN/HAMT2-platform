@@ -48,6 +48,10 @@ parse by `payload_len` and skip unknown trailing bytes.
 `CAN_RX_SEGMENT` payload, `32 + frame_count * 30` bytes:
 - This is lossless packing for high-load receive. It is not compression,
   sampling, or summary data.
+- Current production CSM limits `frame_count` to `15` so the payload is at most
+  `32 + 15 * 30 = 482` bytes and the full typed transport frame is `493`
+  bytes. The previous 16-frame packing produced a 512-byte payload and a full
+  typed frame larger than the USB HS 512-byte packet boundary.
 - Header:
   - `0..7 segment_seq64 u64`
   - `8..15 first_capture_seq64 u64`
@@ -64,6 +68,21 @@ parse by `payload_len` and skip unknown trailing bytes.
   - `20 dlc_flags u8`
   - `21 bus u8`
   - `22..29 data[8]`
+
+Sequence meanings are intentionally separate:
+- `capture_seq64`: CAN frame receive sequence. It increases once per captured
+  CAN frame before segment packing.
+- `segment_seq64`: `CAN_RX_SEGMENT` creation sequence. It increases once per
+  emitted segment attempt.
+- typed transport `seq`: typed record frame sequence. It increases once per
+  encoded typed frame.
+
+Gap interpretation:
+- `capture_seq64` gap means loss around CAN receive queueing or segment
+  construction.
+- `segment_seq64` gap means `CAN_RX_SEGMENT` record-level loss.
+- typed transport `seq` gap means typed stream transport/parser loss after a
+  typed frame was encoded.
 
 Current board baseline:
 - MCP2515 receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
@@ -220,6 +239,26 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `24` serial TX backpressure observed
 - `25` serial TX ring clear. `detail` is clear reason and `counter` is dropped
   queued byte count.
+
+Serial CDC uplink policy:
+- Connected CDC backpressure must never clear the software TX ring.
+- `BOARD_EVENT` code `24` means CDC send backpressure was observed and is
+  rate-limited diagnostic evidence.
+- `BOARD_EVENT` code `25` means bytes were actually discarded from the TX ring.
+  It must only be emitted for real stale-byte discard paths such as disconnect
+  handling, and `counter` must be the discarded byte count.
+- A typed frame must be atomically admitted into the byte ring. Implementations
+  must calculate the full typed frame length, verify ring free space and
+  priority admission, then enqueue all bytes or enqueue none.
+- Partial typed frame enqueue is forbidden because it can corrupt VSM parser
+  resynchronization.
+- Production CSM keeps an 8 KiB critical reserve inside the 64 KiB TX ring.
+  Normal/diagnostic records may only use the normal region; critical evidence
+  may use the reserve.
+- Critical reserve users include `CAN_RX_SEGMENT`, `CONTROL_ACK`, `CAN_TX_RAW`,
+  fault/safety transitions, and explicit loss accounting.
+- Diagnostic records include debug, profiler, repeated MCP status/error, and
+  verbose log events.
 
 `ADC_SAMPLE` payload, 44 bytes:
 - `0..7 mono_us u64`
@@ -391,7 +430,7 @@ Extended 192-byte `BOARD_HEALTH v4` payload:
 - `176..179 serial_tx_high_water_bytes u32`
 - `180..183 shared_can_queue_high_water u32`
 - `184..187 MCP drain time-budget-hit total u32`
-- `188..191 reserved`
+- `188..191 CAN_RX_SEGMENT enqueue-failed frame total u32`
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - `bus_count` is build-profile driven. Single-lane MCP profiles use

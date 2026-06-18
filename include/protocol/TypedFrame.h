@@ -42,6 +42,14 @@ uint32_t rd_u32_le(const uint8_t* p);
 uint16_t crc16_ccitt(const uint8_t* data, size_t len);
 uint64_t mono64_us();
 
+static constexpr size_t kTypedFrameOverheadLen = 11;
+constexpr size_t encoded_typed_frame_len(uint16_t payload_len) {
+  return kTypedFrameOverheadLen + static_cast<size_t>(payload_len);
+}
+bool encode_typed_frame(uint8_t* frame, size_t capacity, RecordType type,
+                        const uint8_t* payload, uint16_t len, uint16_t seq,
+                        uint8_t flags, size_t* written);
+
 bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
                        uint16_t len, uint16_t& seq, uint8_t flags = 0);
 
