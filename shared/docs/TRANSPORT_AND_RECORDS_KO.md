@@ -276,6 +276,12 @@ Serial CDC uplink policy:
   fault/safety transitions, and explicit loss accounting.
 - Diagnostic records include debug, profiler, repeated MCP status/error, and
   verbose log events.
+- The firmware may suppress diagnostic records during the boot quiet window or
+  while CDC TX pressure is active. Critical evidence, `CAPABILITY`, and
+  `BOARD_HEALTH` must remain admissible.
+- Low-value periodic evidence such as encoder-derived records may be sampled at
+  a lower rate while CDC TX pressure is active. This must not affect raw CAN
+  segment evidence or control acknowledgements.
 
 `ADC_SAMPLE` payload, 44 bytes:
 - `0..7 mono_us u64`

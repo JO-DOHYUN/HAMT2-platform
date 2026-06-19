@@ -169,6 +169,22 @@
 #define BOARD_CAPABILITY_PERIOD_MS 2000
 #endif
 
+#ifndef BOARD_UPLINK_BOOT_QUIET_MS
+#define BOARD_UPLINK_BOOT_QUIET_MS 2000
+#endif
+
+#ifndef BOARD_ENCODER_DERIVED_PERIOD_MS
+#define BOARD_ENCODER_DERIVED_PERIOD_MS 50
+#endif
+
+#ifndef BOARD_ENCODER_DERIVED_PRESSURE_PERIOD_MS
+#define BOARD_ENCODER_DERIVED_PRESSURE_PERIOD_MS 250
+#endif
+
+#ifndef BOARD_ENCODER_DERIVED_BOOT_QUIET_PERIOD_MS
+#define BOARD_ENCODER_DERIVED_BOOT_QUIET_PERIOD_MS 500
+#endif
+
 #ifndef BOARD_ENABLE_STATUS_LED
 #define BOARD_ENABLE_STATUS_LED 1
 #endif
@@ -556,6 +572,7 @@ static SafetyState safety_state = SafetyState::MonitorOnly;
 static uint32_t last_health_ms = 0;
 static uint32_t last_capability_ms = 0;
 static uint32_t last_encoder_derived_ms = 0;
+static uint32_t uplink_boot_ms = 0;
 static uint32_t last_watchdog_toggle_ms = 0;
 static uint32_t last_can_init_retry_ms = 0;
 static uint32_t can_init_retry_delay_ms = BOARD_MCP2515_INIT_RETRY_MIN_MS;
@@ -652,8 +669,33 @@ static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16
 #endif
 }
 
+static bool uplink_boot_quiet_active() {
+  return static_cast<uint32_t>(millis() - uplink_boot_ms) < BOARD_UPLINK_BOOT_QUIET_MS;
+}
+
+static bool uplink_tx_pressure_active() {
+  return serial_tx_scheduler.backpressureActive() ||
+         serial_tx_scheduler.normalThrottleActive() ||
+         serial_tx_scheduler.queuedBytes() >= BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
+}
+
+static bool should_suppress_low_value_record(RecordType type, UplinkPriority priority) {
+  if (priority == UplinkPriority::Critical ||
+      type == RecordType::Capability ||
+      type == RecordType::BoardHealth) {
+    return false;
+  }
+  if (priority != UplinkPriority::Diagnostic) {
+    return false;
+  }
+  return uplink_boot_quiet_active() || uplink_tx_pressure_active();
+}
+
 static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
                         UplinkPriority priority, uint8_t flags = 0) {
+  if (should_suppress_low_value_record(type, priority)) {
+    return false;
+  }
   return enqueue_typed_record(type, payload, len, priority, flags);
 }
 
@@ -2553,8 +2595,14 @@ static void service_encoder() {
   }
 
   const uint32_t now_ms = millis();
-  if (now_ms - last_encoder_derived_ms >= 50) {
-    const uint32_t dt_ms = last_velocity_ms == 0 ? 50 : now_ms - last_velocity_ms;
+  uint32_t derived_period_ms = BOARD_ENCODER_DERIVED_PERIOD_MS;
+  if (uplink_boot_quiet_active()) {
+    derived_period_ms = BOARD_ENCODER_DERIVED_BOOT_QUIET_PERIOD_MS;
+  } else if (uplink_tx_pressure_active()) {
+    derived_period_ms = BOARD_ENCODER_DERIVED_PRESSURE_PERIOD_MS;
+  }
+  if (now_ms - last_encoder_derived_ms >= derived_period_ms) {
+    const uint32_t dt_ms = last_velocity_ms == 0 ? derived_period_ms : now_ms - last_velocity_ms;
     const int64_t delta = snap.position - last_position_for_velocity;
     int32_t cps = 0;
     if (dt_ms > 0) {
@@ -2568,6 +2616,7 @@ static void service_encoder() {
 }
 
 void setup() {
+  uplink_boot_ms = millis();
   Serial.begin(115200);
   init_status_led();
   init_runtime_watchdog();
