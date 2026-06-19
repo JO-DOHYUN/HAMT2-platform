@@ -220,7 +220,10 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `6` estop asserted
 - `7` encoder index
 - `8` encoder wrap
-- `9` MCP2515 error
+- `9` MCP2515 error. This is reserved for actual MCP2515 SPI/CAN error
+  evidence such as invalid all-ones status reads, `ERRIF`, `MERRF`, or RX
+  overflow flags. Plain TX-complete interrupt housekeeping must not be reported
+  as this error.
 - `10` MCP2515 SPI snapshot
 - `11` built-in CAN begin failed
 - `12` built-in CAN TX failed

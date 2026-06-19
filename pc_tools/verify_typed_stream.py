@@ -306,6 +306,19 @@ def describe(frame):
                 f"stage={stage} CANSTAT=0x{canstat:02X} CANCTRL=0x{canctrl:02X} "
                 f"CANINTF=0x{canintf:02X} EFLG=0x{eflg:02X} extra=0x{extra:02X}"
             )
+        if code == 9:
+            detail = u16(payload, 10)
+            counter = u32(payload, 12)
+            stage = (detail >> 8) & 0xFF
+            canintf = detail & 0xFF
+            eflg = (counter >> 24) & 0xFF
+            canctrl = (counter >> 16) & 0xFF
+            spi_err_low = counter & 0xFFFF
+            return (
+                f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={code} "
+                f"name={event_name} stage={stage} CANINTF=0x{canintf:02X} "
+                f"EFLG=0x{eflg:02X} CANCTRL=0x{canctrl:02X} spi_err_low={spi_err_low}"
+            )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={code} name={event_name} "
             f"detail={u16(payload, 10)} counter={u32(payload, 12)}"

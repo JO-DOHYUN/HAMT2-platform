@@ -1608,23 +1608,23 @@ static void __attribute__((unused)) service_mcp2515_status_after_drain(bool forc
     return;
   }
 
-  bool handled_status = false;
+  bool error_status = false;
   if (eflg & (MCP2515::EFLG_RX0OVR | MCP2515::EFLG_RX1OVR)) {
     can_fifo_overflow_total++;
     mcp_service.error_flag_total++;
     mcp2515->clearRXnOVRFlags();
     mcp2515->clearERRIF();
-    handled_status = true;
+    error_status = true;
   } else if (canintf & MCP2515::CANINTF_ERRIF) {
     mcp_service.error_flag_total++;
     mcp2515->clearERRIF();
-    handled_status = true;
+    error_status = true;
   }
 
   if (canintf & MCP2515::CANINTF_MERRF) {
     mcp_service.error_flag_total++;
     mcp2515->clearMERR();
-    handled_status = true;
+    error_status = true;
   }
 
   if (canintf & (MCP2515::CANINTF_TX0IF | MCP2515::CANINTF_TX1IF | MCP2515::CANINTF_TX2IF)) {
@@ -1635,7 +1635,6 @@ static void __attribute__((unused)) service_mcp2515_status_after_drain(bool forc
 #else
     mcp2515->clearTXInterrupts();
 #endif
-    handled_status = true;
   }
 
   const bool rx_irq_left = (canintf & (MCP2515::CANINTF_RX0IF | MCP2515::CANINTF_RX1IF)) != 0;
@@ -1643,7 +1642,7 @@ static void __attribute__((unused)) service_mcp2515_status_after_drain(bool forc
   mcp_service.last_int_low = int_low;
   mcp2515_irq_pending = int_low || rx_irq_left;
 
-  if (force_event || handled_status) {
+  if (force_event || error_status) {
     emit_mcp_status_event_throttled(6, canintf, eflg);
   }
 #else
