@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "board/uplink/UplinkPriority.h"
+#include "protocol/TypedFrame.h"
 
 namespace csm::board::uplink {
 
@@ -11,23 +12,16 @@ enum class SerialTxAdmissionResult : uint8_t {
   Accept = 0,
   NotReady,
   NoSpace,
-  ReserveProtected,
-  BackpressureSuppressed,
-  NormalThrottle,
 };
 
 struct SerialTxSchedulerConfig {
-  uint32_t critical_reserve_bytes = 0;
   uint32_t drain_time_budget_us = 0;
   uint32_t max_writes_per_pump = 0;
   uint32_t max_bytes_per_pump = 0;
-  uint32_t normal_high_water_bytes = 0;
-  uint32_t normal_low_water_bytes = 0;
 };
 
 struct SerialTxCounters {
   uint32_t enqueue_fail_total = 0;
-  uint32_t reserve_reject_total = 0;
   uint32_t ring_clear_total = 0;
   uint32_t ring_cleared_bytes_total = 0;
   uint32_t backpressure_total = 0;
@@ -40,7 +34,6 @@ struct SerialTxCounters {
   uint32_t partial_write_total = 0;
   uint32_t write_attempt_total = 0;
   uint32_t write_complete_total = 0;
-  uint32_t normal_throttle_total = 0;
   uint32_t backpressure_max_duration_ms = 0;
 };
 
@@ -56,14 +49,14 @@ struct SerialTxServiceResult {
 
 class SerialTxScheduler {
  public:
-  void begin(uint8_t* ring, uint32_t ring_size, const SerialTxSchedulerConfig& config);
+  void begin(const SerialTxSchedulerConfig& config);
 
   uint32_t queuedBytes() const;
   uint32_t freeBytes() const;
-  uint32_t capacityBytes() const;
-  uint32_t normalLimitBytes() const;
-  bool normalThrottleActive() const;
-  bool backpressureActive() const;
+  uint32_t capacityBytes() const { return kFrameCapacity; }
+  uint32_t normalLimitBytes() const { return kFrameCapacity; }
+  bool backpressureActive() const { return blocked_since_ms_ != 0; }
+  bool hasActiveFrame() const { return frame_len_ > frame_offset_; }
 
   SerialTxAdmissionResult admissionResult(uint32_t len, UplinkPriority priority) const;
   bool canEnqueue(uint32_t len, UplinkPriority priority) const;
@@ -75,19 +68,18 @@ class SerialTxScheduler {
   const SerialTxCounters& counters() const { return counters_; }
 
  private:
-  uint8_t* ring_ = nullptr;
-  uint32_t ring_size_ = 0;
-  uint32_t mask_ = 0;
-  uint32_t head_ = 0;
-  uint32_t tail_ = 0;
+  static constexpr uint32_t kFrameCapacity =
+      static_cast<uint32_t>(csm::encoded_typed_frame_len(csm::kMaxPayloadLen));
+
+  uint8_t frame_[kFrameCapacity] = {};
+  uint32_t frame_len_ = 0;
+  uint32_t frame_offset_ = 0;
   uint32_t blocked_since_ms_ = 0;
   SerialTxSchedulerConfig config_;
   SerialTxCounters counters_;
-  bool normal_throttle_active_ = false;
 
-  bool ready() const;
-  void updateNormalThrottle();
-  void rewindTail(uint32_t count);
+  void resetFrame();
+  void noteBackpressure(uint32_t now_ms, SerialTxServiceResult& result);
 };
 
 }  // namespace csm::board::uplink

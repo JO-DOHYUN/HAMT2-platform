@@ -243,35 +243,40 @@ Current `BOARD_EVENT` codes used by the reference firmware:
   `detail` is duration ms for recovered CDC backpressure, or a capped pending
   frame count for deferred CAN segment loss accounting. `counter` is the
   relevant total counter.
-- `25` serial TX ring clear. `detail` is clear reason and `counter` is dropped
-  queued byte count.
+- `25` uplink staging clear. `detail` is clear reason and `counter` is dropped
+  staged byte count.
 
 Serial CDC uplink policy:
-- Connected CDC backpressure must never clear the software TX ring.
+- Connected CDC backpressure must never clear queued/staged uplink data.
 - Production dual CSM requests CDC sends in 512-byte chunks, with each pump
   bounded by a maximum of two write attempts, 1024 requested bytes, and a
   firmware time budget.
 - `BOARD_EVENT` code `24` is not emitted repeatedly while CDC remains blocked.
   Ordinary CDC backpressure is reported as diagnostic evidence after recovery;
   explicit loss accounting may be deferred and emitted once with critical
-  priority after the ring can accept it.
-- Admission suppression caused by CDC backpressure or normal high-water
-  throttling is policy drop, not a serial enqueue failure. Serial enqueue
-  failure counters are reserved for not-ready/no-space/hard admission failures.
-- `BOARD_EVENT` code `25` means bytes were actually discarded from the TX ring.
-  It must only be emitted for real stale-byte discard paths such as disconnect
-  handling, and `counter` must be the discarded byte count.
-- A typed frame must be atomically admitted into the byte ring. Implementations
-  must calculate the full typed frame length, verify ring free space and
-  priority admission, then enqueue all bytes or enqueue none.
-- Partial typed frame enqueue is forbidden because it can corrupt VSM parser
+  priority after the critical queue can accept it.
+- Admission suppression caused by CDC backpressure or queue pressure is policy
+  drop, not a serial enqueue failure. Serial enqueue failure counters are
+  reserved for not-ready/no-space/hard staging failures.
+- `BOARD_EVENT` code `25` means bytes were actually discarded from the uplink
+  staging path. It must only be emitted for real stale-byte discard paths such
+  as disconnect handling, and `counter` must be the discarded byte count.
+- Priority admission is applied before any record is serialized into bytes.
+  The production CSM keeps separate critical, normal, and diagnostic record
+  queues. This structurally replaces the old byte-ring reserve model: normal
+  and diagnostic records cannot consume the critical queue capacity.
+- The default critical queue depth is 16 records, which is roughly an 8 KiB
+  reserve at the current 512-byte maximum typed payload. Normal and diagnostic
+  queues are intentionally smaller bounded buffers.
+- A typed frame must be atomically staged for CDC output. Implementations must
+  calculate the full typed frame length, verify that the active typed-frame
+  staging buffer is free, then stage all bytes or stage none.
+- Partial typed frame staging is forbidden because it can corrupt VSM parser
   resynchronization.
-- Production CSM keeps an 8 KiB critical reserve inside the 64 KiB TX ring.
-  Normal/diagnostic records may only use the normal region; critical evidence
-  may use the reserve.
-- Normal/diagnostic admission is also gated by a high/low watermark hysteresis
-  so low-value records stop entering the ring before the critical reserve is
-  threatened.
+- `typed_seq` is assigned only when a pending record is encoded into the active
+  CDC staging buffer. Reordering across priority queues therefore changes only
+  which pending record is sent next; the typed stream sequence remains
+  contiguous in actual byte-stream order.
 - Critical reserve users include `CAN_RX_SEGMENT`, `CONTROL_ACK`, `CAN_TX_RAW`,
   fault/safety transitions, and explicit loss accounting.
 - Diagnostic records include debug, profiler, repeated MCP status/error, and
@@ -410,7 +415,8 @@ Extended 192-byte `CAPABILITY` payload:
 - `120..123 firmware_build_id u32`
 - `124..127 MCP SPI Hz u32`
 - `128..129 CAN record drain budget u16`
-- `130..131 serial TX ring size KiB u16`
+- `130..131 configured uplink TX budget KiB u16`; older hosts may display this
+  as serial TX ring size.
 - `132..143 git short sha ASCII, zero-padded`
 - `144..191 PlatformIO env name ASCII, zero-padded`
 
@@ -450,7 +456,8 @@ Extended 192-byte `BOARD_HEALTH v4` payload:
 - `164..167 serial_ring_clear_total u32`
 - `168..171 serial_ring_cleared_bytes_total u32`
 - `172..175 serial_backpressure_total u32`
-- `176..179 serial_tx_high_water_bytes u32`
+- `176..179 uplink_tx_high_water_bytes u32`: maximum observed bytes waiting in
+  record queues or in the active typed-frame CDC staging buffer
 - `180..183 shared_can_queue_high_water u32`
 - `184..187 MCP drain time-budget-hit total u32`
 - `188..191 CAN_RX_SEGMENT enqueue-failed frame total u32`

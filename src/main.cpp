@@ -464,19 +464,15 @@ static volatile uint64_t encoder_index_mono_us = 0;
 static volatile uint32_t encoder_index_count = 0;
 
 static constexpr uint32_t kSerialTxRingSize = BOARD_SERIAL_TX_RING_SIZE;
-static constexpr uint32_t kSerialTxRingMask = kSerialTxRingSize - 1;
-static_assert((kSerialTxRingSize & kSerialTxRingMask) == 0, "BOARD_SERIAL_TX_RING_SIZE must be a power of two");
-static_assert(BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES < kSerialTxRingSize,
-              "BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES must be smaller than BOARD_SERIAL_TX_RING_SIZE");
-static_assert(BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES < BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES,
-              "BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES must be below high water");
-static_assert(BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES <
-              (kSerialTxRingSize - BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES),
-              "BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES must leave critical reserve intact");
 static_assert(csm::encoded_typed_frame_len(kCanRxSegmentHeaderLen +
               kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames) <= 512,
               "CAN_RX_SEGMENT typed frame must fit within one 512-byte USB HS packet");
-static uint8_t serial_tx_ring[kSerialTxRingSize];
+static_assert(BOARD_UPLINK_CRITICAL_QUEUE_RECORDS >= 8,
+              "critical uplink queue must reserve enough loss-evidence records");
+static_assert(BOARD_UPLINK_NORMAL_QUEUE_RECORDS >= 4,
+              "normal uplink queue must absorb health/capability bursts");
+static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
+              "diagnostic uplink queue must retain bounded low-value telemetry");
 static SerialTxScheduler serial_tx_scheduler;
 static UplinkScheduler uplink_scheduler;
 static CanRxSegmentBuilder can_rx_segment_builder;
@@ -614,7 +610,7 @@ static void service_deferred_loss_events();
 
 static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
   const csm::board::uplink::SerialTxServiceResult result =
-      serial_tx_scheduler.service(byte_budget, millis(), micros());
+      uplink_scheduler.service(byte_budget, millis(), micros());
   if (result.backpressure_event) {
     emit_board_event(EventSerialTxBackpressure,
                      static_cast<uint16_t>(result.backpressure_duration_ms & 0xFFFF),
@@ -675,8 +671,9 @@ static bool uplink_boot_quiet_active() {
 
 static bool uplink_tx_pressure_active() {
   return serial_tx_scheduler.backpressureActive() ||
-         serial_tx_scheduler.normalThrottleActive() ||
-         serial_tx_scheduler.queuedBytes() >= BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
+         serial_tx_scheduler.hasActiveFrame() ||
+         uplink_scheduler.pressureActive() ||
+         uplink_scheduler.queuedPayloadBytes() >= BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
 }
 
 static bool should_suppress_low_value_record(RecordType type, UplinkPriority priority) {
@@ -750,13 +747,10 @@ static void note_pending_can_segment_enqueue_fail(uint32_t frames) {
 }
 
 static void service_deferred_loss_events() {
-  if (pending_can_segment_enqueue_fail_frames == 0 ||
-      serial_tx_scheduler.backpressureActive()) {
+  if (pending_can_segment_enqueue_fail_frames == 0) {
     return;
   }
-
-  const uint32_t frame_len = static_cast<uint32_t>(csm::encoded_typed_frame_len(16));
-  if (serial_tx_scheduler.freeBytes() < frame_len) {
+  if (!uplink_scheduler.hasQueueSpace(UplinkPriority::Critical)) {
     return;
   }
 
@@ -1332,7 +1326,9 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 #if BOARD_ENABLE_VOLTAGE_ADC
   payload[47] |= voltage_adc_ok ? (1u << 5) : 0;
 #endif
-  payload[47] |= serial_tx_scheduler.queuedBytes() > 0 ? (1u << 6) : 0;
+  payload[47] |= (serial_tx_scheduler.queuedBytes() + uplink_scheduler.queuedPayloadBytes()) > 0
+                     ? (1u << 6)
+                     : 0;
   payload[47] |= uplink_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
   payload[52] = 4;  // BOARD_HEALTH payload version.
@@ -1383,7 +1379,11 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[164], serial_counters.ring_clear_total);
   wr_u32_le(&payload[168], serial_counters.ring_cleared_bytes_total);
   wr_u32_le(&payload[172], serial_counters.backpressure_total);
-  wr_u32_le(&payload[176], serial_counters.high_water_bytes);
+  uint32_t uplink_high_water = serial_counters.high_water_bytes;
+  if (uplink_scheduler.queuedPayloadHighWaterBytes() > uplink_high_water) {
+    uplink_high_water = uplink_scheduler.queuedPayloadHighWaterBytes();
+  }
+  wr_u32_le(&payload[176], uplink_high_water);
   wr_u32_le(&payload[180], can_queue_high_water);
 #if BOARD_ENABLE_MCP2515
   wr_u32_le(&payload[184], mcp_service.drain_time_budget_hit_total);
@@ -2626,13 +2626,10 @@ void setup() {
   }
 
   csm::board::uplink::SerialTxSchedulerConfig serial_tx_config;
-  serial_tx_config.critical_reserve_bytes = BOARD_SERIAL_TX_CRITICAL_RESERVE_BYTES;
   serial_tx_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
   serial_tx_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
   serial_tx_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
-  serial_tx_config.normal_high_water_bytes = BOARD_SERIAL_TX_NORMAL_HIGH_WATER_BYTES;
-  serial_tx_config.normal_low_water_bytes = BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
-  serial_tx_scheduler.begin(serial_tx_ring, kSerialTxRingSize, serial_tx_config);
+  serial_tx_scheduler.begin(serial_tx_config);
   uplink_scheduler.begin(&serial_tx_scheduler);
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
 
