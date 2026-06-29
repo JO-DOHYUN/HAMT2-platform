@@ -245,9 +245,17 @@ Current `BOARD_EVENT` codes used by the reference firmware:
   connected/disconnected typed-frame clear is forbidden.
 - `26` CAN_RX_SEGMENT enqueue failed/loss accounting. `detail` is the capped
   pending CAN frame count and `counter` is `can_segment_enqueue_fail_total`.
+- `27` USB CDC session opened. `detail` bit0 means CDC DTR session is required,
+  bit1 means DTR is session-only/passive-safe. `counter` is the session-open
+  count since boot.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.
+- Before a USB CDC host session is open, the board must not stage typed uplink
+  records into the payload pool. Capability/health/session evidence is emitted
+  immediately when the session opens. CAN frames observed before the host
+  session are outside the VSM capture session and must not be counted as
+  `CAN_RX_SEGMENT` enqueue loss.
 - Production dual CSM requests CDC sends in 512-byte chunks, with each pump
   bounded by a maximum of two write attempts, 1024 requested bytes, and a
   firmware time budget.
@@ -440,7 +448,12 @@ Extended 224-byte `CAPABILITY` payload:
 - `208..211 bus0 passive extension`: mode, ack capability, error-frame
   capability, transceiver reset-safe.
 - `212..215 bus1 passive extension`: same layout as bus0.
-- `216..223 reserved`
+- `216 usb_cdc_dtr_session_required u8`: nonzero means the Arduino CDC uplink
+  requires host DTR assertion before bytes are delivered.
+- `217 usb_cdc_dtr_session_only u8`: nonzero means DTR is used only as a USB
+  session gate and does not enable board downlink, host CAN TX, control, reset,
+  or MCP normal-mode behavior.
+- `218..223 reserved`
 
 Extended 128-byte `BOARD_HEALTH` payload:
 - `0..51`: same prefix as the original 52-byte health payload.

@@ -9,6 +9,14 @@ namespace csm::board {
 
 namespace {
 
+constexpr uint32_t record_bit(RecordType type) {
+  return 1u << static_cast<uint8_t>(type);
+}
+
+bool supports_uplink_record(const CapabilityPayloadConfig& config, RecordType type) {
+  return (config.supported_uplink_records & record_bit(type)) != 0;
+}
+
 void write_bus_descriptor(uint8_t* payload, uint8_t offset, const CapabilityBusDescriptor& bus) {
   payload[offset + 0] = bus.bus_id;
   payload[offset + 1] = bus.role;
@@ -56,10 +64,11 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
   wr_u32_le(&payload[12], config.can_queue_size);
   wr_u32_le(&payload[16], config.encoder_ppr);
   wr_u32_le(&payload[20], config.encoder_frequency_limit_hz);
-  payload[24] = 0x01;
-  payload[25] = 0x01;
-  payload[26] = 0x01;
-  payload[27] = 0x01;
+  payload[24] = (supports_uplink_record(config, RecordType::CanRxRaw) ||
+                 supports_uplink_record(config, RecordType::CanRxSegment)) ? 0x01 : 0x00;
+  payload[25] = supports_uplink_record(config, RecordType::CanTxRaw) ? 0x01 : 0x00;
+  payload[26] = supports_uplink_record(config, RecordType::EncEdgeRaw) ? 0x01 : 0x00;
+  payload[27] = supports_uplink_record(config, RecordType::EncDerived) ? 0x01 : 0x00;
   payload[28] = config.adc_sample_supported ? 0x01 : 0x00;
   payload[29] = 0x01;
   payload[30] = 0x01;
@@ -132,6 +141,8 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
     payload[offset + 2] = config.bus_error_frame_capability[i];
     payload[offset + 3] = config.bus_transceiver_reset_safe[i];
   }
+  payload[216] = config.usb_cdc_dtr_session_required;
+  payload[217] = config.usb_cdc_dtr_session_only;
 
   return kCapabilityV5PayloadLen;
 }

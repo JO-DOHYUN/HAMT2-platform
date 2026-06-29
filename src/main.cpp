@@ -221,6 +221,14 @@
 #define BOARD_USB_CDC_RECONNECT_RESET_MS 1500
 #endif
 
+#ifndef BOARD_USB_CDC_DTR_SESSION_REQUIRED
+#define BOARD_USB_CDC_DTR_SESSION_REQUIRED 1
+#endif
+
+#ifndef BOARD_USB_CDC_DTR_SESSION_ONLY
+#define BOARD_USB_CDC_DTR_SESSION_ONLY BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#endif
+
 #ifndef BOARD_ENABLE_MCP2515_TX_TEST
 #define BOARD_ENABLE_MCP2515_TX_TEST 0
 #endif
@@ -469,6 +477,7 @@ enum BoardEventCode : uint16_t {
   EventSerialTxBackpressure = 24,
   EventSerialTxRingClear = 25,
   EventCanRxSegmentEnqueueFailed = 26,
+  EventUsbCdcSessionOpen = 27,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -648,7 +657,9 @@ static uint32_t can_init_retry_count = 0;
 static bool mcp2515_listen_only_mode = false;
 #endif
 static bool usb_host_was_connected = false;
+static bool uplink_session_was_open = false;
 static uint32_t usb_disconnected_since_ms = 0;
+static uint32_t usb_cdc_session_open_total = 0;
 static uint32_t usb_reconnect_count = 0;
 static uint32_t usb_forced_reset_count = 0;
 static uint32_t passive_violation_latch = 0;
@@ -726,6 +737,14 @@ static bool emit_board_event_with_priority(uint16_t code, uint16_t detail, uint3
                                            UplinkPriority priority);
 static void service_deferred_loss_events();
 
+static bool uplink_host_session_open() {
+#if defined(SERIAL_CDC)
+  return _SerialUSB.connected();
+#else
+  return true;
+#endif
+}
+
 static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
   const csm::board::uplink::SerialTxServiceResult result =
       uplink_scheduler.service(byte_budget, millis(), micros());
@@ -786,6 +805,9 @@ static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16
   static uint16_t serial_transport_seq = 0;
   return csm::emit_typed_record(Serial, type, payload, len, serial_transport_seq, flags);
 #else
+  if (!uplink_host_session_open()) {
+    return false;
+  }
   return uplink_scheduler.enqueueRecord(type, payload, len, priority, flags);
 #endif
 }
@@ -1060,6 +1082,8 @@ static void emit_capability() {
   config.usb_backpressure_isolated = 1;
   config.dtr_reset_sensitive = BOARD_USB_CDC_RECONNECT_RESET_MS != 0 ? 1 : 0;
   config.passive_acceptance_allowed = passive_acceptance_allowed();
+  config.usb_cdc_dtr_session_required = BOARD_USB_CDC_DTR_SESSION_REQUIRED ? 1 : 0;
+  config.usb_cdc_dtr_session_only = BOARD_USB_CDC_DTR_SESSION_ONLY ? 1 : 0;
   config.hardware_safety_case_id = BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID;
   config.bench_verification_id = BOARD_PASSIVE_BENCH_VERIFICATION_ID;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
@@ -1160,6 +1184,10 @@ static void emit_capability() {
 
 static void service_capability_advertisement() {
   const uint32_t now_ms = millis();
+  if (!uplink_host_session_open()) {
+    last_capability_ms = now_ms;
+    return;
+  }
   if (now_ms - last_capability_ms < BOARD_CAPABILITY_PERIOD_MS) {
     return;
   }
@@ -1354,6 +1382,7 @@ static EncoderSnapshot poll_encoder() {
   return snap;
 }
 
+#if BOARD_ENABLE_ENCODER_IO
 static void emit_encoder_edge(const EncoderSnapshot& snap, uint8_t flags) {
   uint8_t payload[28];
   wr_u64_le(&payload[0], snap.mono_us);
@@ -1377,6 +1406,7 @@ static void emit_encoder_derived(const EncoderSnapshot& snap, int32_t velocity_c
   wr_u32_le(&payload[24], snap.fault_flags);
   emit_record(RecordType::EncDerived, payload, sizeof(payload));
 }
+#endif
 
 static void __attribute__((unused)) emit_can_rx_raw(const CanRxItem& item) {
   uint8_t payload[30];
@@ -1392,6 +1422,9 @@ static void __attribute__((unused)) emit_can_rx_raw(const CanRxItem& item) {
 
 static bool emit_can_rx_segment_payload(const CanRxItem* items, uint8_t count, uint64_t segment_seq) {
   if (items == nullptr || count == 0) {
+    return true;
+  }
+  if (!uplink_host_session_open()) {
     return true;
   }
   if (count > kCanRxSegmentMaxFrames) {
@@ -1581,6 +1614,31 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[252], passive_violation_latch);
   wr_u32_le(&payload[256], capture_invalid_reason);
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
+}
+
+static void service_uplink_session_state() {
+  const bool open = uplink_host_session_open();
+  if (!open) {
+    uplink_session_was_open = false;
+    return;
+  }
+  if (uplink_session_was_open) {
+    return;
+  }
+
+  uplink_session_was_open = true;
+  usb_cdc_session_open_total++;
+
+  emit_capability();
+  last_capability_ms = millis();
+
+  uint16_t detail = BOARD_USB_CDC_DTR_SESSION_REQUIRED ? 0x0001u : 0x0000u;
+  detail |= BOARD_USB_CDC_DTR_SESSION_ONLY ? 0x0002u : 0x0000u;
+  emit_board_event(EventUsbCdcSessionOpen, detail, usb_cdc_session_open_total);
+
+  const EncoderSnapshot snap = poll_encoder();
+  emit_board_health(snap);
+  last_health_ms = millis();
 }
 
 static bool init_voltage_adc_lane() {
@@ -2784,6 +2842,9 @@ static void drain_can_records(int budget) {
 }
 
 static void service_encoder() {
+#if !BOARD_ENABLE_ENCODER_IO
+  return;
+#else
   static int64_t last_position_for_velocity = 0;
   static uint32_t last_velocity_ms = 0;
 
@@ -2818,6 +2879,7 @@ static void service_encoder() {
     last_velocity_ms = now_ms;
     last_encoder_derived_ms = now_ms;
   }
+#endif
 }
 
 void setup() {
@@ -2889,6 +2951,7 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
+  service_uplink_session_state();
   if (!kTestMode && can_backend_ok) {
     pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
   }
@@ -2935,7 +2998,9 @@ void loop() {
   service_voltage_adc_lane();
 
   const uint32_t now_ms = millis();
-  if (now_ms - last_health_ms >= 1000) {
+  if (!uplink_host_session_open()) {
+    last_health_ms = now_ms;
+  } else if (now_ms - last_health_ms >= 1000) {
     const EncoderSnapshot snap = poll_encoder();
     emit_board_health(snap);
     last_health_ms = now_ms;

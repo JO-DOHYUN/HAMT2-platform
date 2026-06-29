@@ -63,6 +63,8 @@ struct CapabilityPayloadConfig {
   uint8_t usb_backpressure_isolated = 0;
   uint8_t dtr_reset_sensitive = 0;
   uint8_t passive_acceptance_allowed = 0;
+  uint8_t usb_cdc_dtr_session_required = 0;
+  uint8_t usb_cdc_dtr_session_only = 0;
   uint32_t hardware_safety_case_id = 0;
   uint32_t bench_verification_id = 0;
   uint8_t bus_mode[2] = {};

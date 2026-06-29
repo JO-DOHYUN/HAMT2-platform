@@ -451,6 +451,8 @@ def describe(frame):
                         f" bus1_ack={payload[213]}"
                         f" bus1_err_frame={payload[214]}"
                         f" bus1_reset_safe={payload[215]}"
+                        f" dtr_session_required={payload[216]}"
+                        f" dtr_session_only={payload[217]}"
                     )
                 return tail
         return base

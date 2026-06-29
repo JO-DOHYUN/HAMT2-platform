@@ -26,7 +26,8 @@ This is the standalone CSM board firmware repository.
 ## CSM Baseline
 - Passive Product `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic
   CAN 2.0 500 kbps, MCP listen-only. Host downlink/control/TX/test paths are
-  compile-time removed.
+  compile-time removed. Encoder-derived streaming is also disabled in the
+  product passive env; keep non-CAN instrumentation in Full/diagnostic envs.
 - Full Instrumented keeps `bus=0` MCP2515/TJA1050 and `bus=1` Mid Carrier J4
   CAN1 through onboard U2 for bench/HIL audited control tests.
 - Live production output is typed transport v1.
@@ -36,10 +37,14 @@ This is the standalone CSM board firmware repository.
   active capability.
 - `CAPABILITY` exposes firmware identity, bus descriptors, and build settings.
 - `CAPABILITY v5` exposes firmware profile, vehicle-impact state, host command
-  RX, control path, USB reset sensitivity, and passive safety evidence IDs.
+  RX, control path, USB reset sensitivity, CDC DTR session policy, and passive
+  safety evidence IDs.
 - `BOARD_HEALTH v6` preserves earlier offsets and adds uplink pool/descriptor,
   CAN RX task max time, USB reconnect/reset counters, and passive violation
   latch diagnostics.
+- Passive CDC uplink is session-gated: before host CDC/DTR session open, typed
+  evidence is not staged into the uplink payload pool; session open immediately
+  re-emits capability, USB CDC session evidence, and board health.
 
 ## Canonical Contracts
 - Root routing: `AGENTS.md`
