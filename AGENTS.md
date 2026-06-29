@@ -25,17 +25,21 @@ repositories, not inside this project folder.
   replay/import compatibility, not a live output mode.
 - `CONTROL_ACK` is board request evidence. Actual CAN TX success is proven only
   by `CAN_TX_RAW`.
-- CSM is a typed evidence and control gateway, not a simple USB-CAN bridge.
+- CSM has two explicit artifacts: Passive Product for vehicle-impact-free
+  evidence capture, and Full Instrumented for bench/HIL control work. Do not use
+  Full Instrumented as passive acceptance evidence.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source
   of truth.
 - Do not create or maintain nested `qt/`, `vsm/`, `android/`, or duplicate
   `csm/` project workspaces under this CSM repository. Build and upload CSM only
   from this repository root with PlatformIO.
-- Bus labels are profile/capability-driven. The final Mid Carrier dual CSM env
-  uses external MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1` for typed
-  RX and audited control TX. The earlier dual-internal CAN0/CAN1 + TJA1051
-  target is deferred because this ArduinoCore Portenta profile exposes only one
-  practical CAN object.
+- Bus labels are profile/capability-driven. The Passive Product default env is
+  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`, which exposes the external
+  MCP2515/TJA1050 lane as listen-only `bus=0`. The Full Instrumented env keeps
+  MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1` for bench/HIL RX and
+  audited control TX. The earlier dual-internal CAN0/CAN1 + TJA1051 target is
+  deferred because this ArduinoCore Portenta profile exposes only one practical
+  CAN object.
 
 ## Change Rules
 - If record wire format changes, update `shared/docs/TRANSPORT_AND_RECORDS_KO.md`

@@ -39,6 +39,11 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - voltage raw samples use `ADC_SAMPLE`; scaling/calibration belongs to host/profile metadata
 - final Mid Carrier dual CSM profile uses external MCP2515/TJA1050 RX and
   audited TX as `bus=0`, and Mid Carrier J4/U2 RX and audited TX as `bus=1`
+  only in Full Instrumented bench/HIL builds
+- Passive Product must compile out host downlink/control/CAN TX/test paths,
+  keep MCP2515 listen-only, disable USB reconnect reset, and advertise
+  `vehicle_impact_state=configured_passive` unless hardware and bench safety
+  evidence IDs allow `verified_passive`
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect
@@ -49,6 +54,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 
 ## Architecture Direction
 - board is not a simple bridge anymore
+- default product artifact is a vehicle-impact-free passive evidence device;
+  active control belongs only to Full Instrumented bench/HIL artifacts
 - target shape:
   - `CanRxLane`
   - `EncoderEdgeLane`

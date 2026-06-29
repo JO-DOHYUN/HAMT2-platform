@@ -5,12 +5,14 @@ namespace csm::board::uplink {
 UplinkPriority default_priority_for_record(csm::RecordType type) {
   switch (type) {
     case csm::RecordType::CanRxRaw:
+    case csm::RecordType::CanRxSegment:
+      return UplinkPriority::CanTruth;
     case csm::RecordType::CanTxRaw:
     case csm::RecordType::ControlAck:
-    case csm::RecordType::CanRxSegment:
+      return UplinkPriority::Critical;
+    case csm::RecordType::Capability:
       return UplinkPriority::Critical;
     case csm::RecordType::BoardHealth:
-    case csm::RecordType::Capability:
       return UplinkPriority::Normal;
     case csm::RecordType::BoardEvent:
       return UplinkPriority::Normal;

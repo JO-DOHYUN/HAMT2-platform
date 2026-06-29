@@ -6,11 +6,17 @@
 - encoder data sheet: `dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
 - final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
 - current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
-- current CSM CAN: Portenta H7 M7 + Mid Carrier ASX00055 + MCP2515/TJA1050 SPI
+- current Passive Product CSM CAN: Portenta H7 M7 + Mid Carrier ASX00055 +
+  MCP2515/TJA1050 SPI
   module, `MCP_8MHZ`, `CAN_500KBPS`, 8 MHz SPI, polling drain
   (`BOARD_CAN_IRQ_MODE=0`), `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`,
-  `CS/SCK/SI/SO/INT` level shifted. `bus=0` is the active typed RX and audited
-  control TX lane.
+  `CS/SCK/SI/SO/INT` level shifted. `bus=0` is the typed RX evidence lane and
+  MCP2515 is configured listen-only in the passive env. Host downlink, control
+  TX, CAN TX tests, USB disconnect reset, and MCP normal-mode transition are
+  compile-time forbidden for the passive artifact.
+- Full Instrumented keeps the active-capable dual CSM path for bench/HIL only:
+  MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1`, host control, safety
+  gate, and audited `CAN_TX_RAW`.
 - deferred hardware target: dual internal CAN0/CAN1 through TJA1051-class
   transceivers. This is not active because the current ArduinoCore Portenta
   profile exposes only one practical CAN object.
@@ -47,16 +53,16 @@
   `CONTROL_ACK status=1`, `CAN_TX_RAW bus=1 failed=0`, and Kvaser received the
   same payload. Host `bus=0 id=0x503` produced `CONTROL_ACK status=1` and
   `CAN_TX_RAW bus=0 failed=0`.
-- current rebuild direction, 2026-05-18: keep the verified dual CSM hardware
-  baseline, add heartbeat/arm/lease safety gating, expose extended
-  `CAPABILITY`/`BOARD_HEALTH`, and remove authoritative System/Drive bus role
-  from firmware. VMS must bind semantic roles from capability plus model pack or
-  operator configuration.
+- current rebuild direction, 2026-06-29: split outputs into Passive Product and
+  Full Instrumented. Passive Product is the default build and cannot be accepted
+  as `verified_passive` until hardware safety case and bench verification IDs
+  are nonzero. Full Instrumented remains active-capable and must not be used as
+  passive acceptance evidence.
 - known failed INT design: the previous edge-gated `BOARD_CAN_USE_INT=1` implementation caused red blinking. Do not restore that design. MCP2515 `INT_N` is level-signaled, so RX authority must come from MCP2515 status/register drain, not from a single falling-edge gate.
 
 ## Current Architecture Goal
-- preserve the verified typed CAN/ADC/control baseline while moving the CSM code
-  from a single-file sketch toward scoped modules
+- preserve typed capture truth while splitting vehicle passive evidence from
+  active bench/HIL control
 - keep the current Mid Carrier MCP2515 CSM profile explicit in CAPABILITY,
   health, and build profiles before revisiting a different controller path
 - treat `shared/docs/TRANSPORT_AND_RECORDS_KO.md` as the canonical wire contract
@@ -80,17 +86,16 @@
   - `HealthMonitor`
 - all lanes publish typed records on one monotonic board time axis
 - direct board sensor samples must not be encoded as fake CAN frames
-- host control must be auditable from intent to board decision to actual CAN TX to feedback/event; `CONTROL_ACK` is not final CAN success evidence
+- host control must be auditable from intent to board decision to actual CAN TX
+  to feedback/event in Full Instrumented only; `CONTROL_ACK` is not final CAN
+  success evidence
 - drive encoder input is fixed as industrial HTL front-end plus Portenta `PC6`/`PC7` TIM3 encoder mode and `PA8` index input; direct 24 V HTL to GPIO is forbidden
 - carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
-- current Mid Carrier CSM CAN uses MCP2515 over SPI on `D7..D11`; firmware uses
-  `INT_N` as a level hint, receives `CAN_RX_RAW bus=0`, accepts host CAN TX
-  requests for the allowlisted IDs only after heartbeat+arm+lease safety gates,
-  and audits successful writes as `CAN_TX_RAW bus=0`.
-- optional final dual-channel Mid Carrier CSM env additionally exposes the J4
-  CAN1 terminal as `bus=1` through the onboard U2 transceiver. It receives
-  `CAN_RX_RAW bus=1` and accepts allowlisted host TX requests on `bus=1` through
-  the same safety gate.
+- Passive Product uses MCP2515 over SPI on `D7..D11` in listen-only mode and
+  emits `CAN_RX_SEGMENT bus=0`; it does not accept host CAN TX requests.
+- Full Instrumented additionally exposes the J4 CAN1 terminal as `bus=1`
+  through the onboard U2 transceiver and accepts allowlisted host TX requests
+  through the safety gate.
 - firmware bus descriptors expose physical backend and capability; role is only
   a non-authoritative hint.
 - the previous dual internal CAN direction remains a deferred research path, not

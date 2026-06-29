@@ -71,8 +71,9 @@ EVENT_NAMES = {
     21: "HOST_COMMAND_UNSUPPORTED",
     22: "FAULT_LOCKOUT_CLEARED",
     23: "FIRMWARE_IDENTITY",
-    24: "SERIAL_TX_BACKPRESSURE_RECOVERY_OR_LOSS",
+    24: "SERIAL_TX_BACKPRESSURE_RECOVERY",
     25: "SERIAL_TX_RING_CLEAR",
+    26: "CAN_RX_SEGMENT_ENQUEUE_FAILED",
 }
 
 
@@ -326,7 +327,7 @@ def describe(frame):
 
     if rtype == 8 and len(payload) >= 52:
         extra = ""
-        if len(payload) >= 128 and payload[52] in (2, 4):
+        if len(payload) >= 128 and payload[52] in (2, 4, 5, 6):
             extra = (
                 f" health_v={payload[52]} safety_v2={payload[54]} fault_bits=0x{payload[55]:02X}"
                 f" heartbeat_age_ms={u32(payload, 56)} lease_ms={u32(payload, 60)}"
@@ -337,7 +338,7 @@ def describe(frame):
                 f" mcp_spi_err={u32(payload, 96)} mcp_err_flags={u32(payload, 100)}"
                 f" heartbeat_total={u32(payload, 120)} session_total={u32(payload, 124)}"
             )
-        if len(payload) >= 192 and payload[52] == 4:
+        if len(payload) >= 192 and payload[52] >= 4:
             extra += (
                 f" bus0_rx={u32(payload, 128)} bus0_drop={u32(payload, 132)}"
                 f" bus0_q={u32(payload, 136)} bus0_high={u32(payload, 140)}"
@@ -351,6 +352,29 @@ def describe(frame):
                 f" can_q_high={u32(payload, 180)}"
                 f" mcp_drain_budget_hit={u32(payload, 184)}"
                 f" segment_enqueue_fail={u32(payload, 188)}"
+            )
+        if len(payload) >= 224 and payload[52] >= 5:
+            extra += (
+                f" uplink_large_used={u32(payload, 192)}"
+                f" uplink_large_cap={u32(payload, 196)}"
+                f" uplink_can_reserve_used={u32(payload, 200)}"
+                f" can_truth_q_high={u32(payload, 204)}"
+                f" pool_alloc_fail={u32(payload, 208)}"
+                f" can_truth_pool_fail={u32(payload, 212)}"
+                f" descriptor_high={u32(payload, 216)}"
+                f" diag_suppressed={u32(payload, 220)}"
+            )
+        if len(payload) >= 260 and payload[52] >= 6:
+            extra += (
+                f" fw_profile={u32(payload, 224)}"
+                f" vehicle_impact={u32(payload, 228)}"
+                f" can_rx_task_max_us={u32(payload, 232)}"
+                f" uplink_pool_high_bytes={u32(payload, 236)}"
+                f" uplink_desc_high={u32(payload, 240)}"
+                f" usb_reconnect={u32(payload, 244)}"
+                f" usb_forced_reset={u32(payload, 248)}"
+                f" passive_violation=0x{u32(payload, 252):08X}"
+                f" capture_invalid_reason=0x{u32(payload, 256):08X}"
             )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
@@ -407,6 +431,27 @@ def describe(frame):
                         f" git={zstr(payload, 132, 12)}"
                         f" env={zstr(payload, 144, 48)}"
                     )
+                if len(payload) >= 224:
+                    tail += (
+                        f" fw_profile={payload[192]}"
+                        f" profile_lock={payload[193]}"
+                        f" vehicle_impact={payload[194]}"
+                        f" host_cmd_rx={payload[195]}"
+                        f" control_path={payload[196]}"
+                        f" usb_isolated={payload[197]}"
+                        f" dtr_reset_sensitive={payload[198]}"
+                        f" passive_acceptance={payload[199]}"
+                        f" hw_case=0x{u32(payload, 200):08X}"
+                        f" bench_id=0x{u32(payload, 204):08X}"
+                        f" bus0_mode={payload[208]}"
+                        f" bus0_ack={payload[209]}"
+                        f" bus0_err_frame={payload[210]}"
+                        f" bus0_reset_safe={payload[211]}"
+                        f" bus1_mode={payload[212]}"
+                        f" bus1_ack={payload[213]}"
+                        f" bus1_err_frame={payload[214]}"
+                        f" bus1_reset_safe={payload[215]}"
+                    )
                 return tail
         return base
 
@@ -457,7 +502,7 @@ class GapTracker:
                         self.capture_seq_gaps += max(0, capture_seq - self.last_capture_seq - 1)
                     self.last_capture_seq = capture_seq
 
-        if rtype == 8 and len(payload) >= 192 and payload[52] == 4:
+        if rtype == 8 and len(payload) >= 192 and payload[52] >= 4:
             self.last_health = {
                 "serial_enqueue_fail": u32(payload, 160),
                 "serial_clear": u32(payload, 164),
@@ -470,6 +515,27 @@ class GapTracker:
                 "can_rx_dropped_total": u32(payload, 12),
                 "can_fifo_overflow_total": u32(payload, 16),
             }
+            if len(payload) >= 224 and payload[52] >= 5:
+                self.last_health.update({
+                    "uplink_large_used": u32(payload, 192),
+                    "uplink_can_reserve_used": u32(payload, 200),
+                    "can_truth_q_high": u32(payload, 204),
+                    "pool_alloc_fail": u32(payload, 208),
+                    "can_truth_pool_fail": u32(payload, 212),
+                    "descriptor_high": u32(payload, 216),
+                    "diag_suppressed": u32(payload, 220),
+                })
+            if len(payload) >= 260 and payload[52] >= 6:
+                self.last_health.update({
+                    "fw_profile": u32(payload, 224),
+                    "vehicle_impact": u32(payload, 228),
+                    "can_rx_task_max_us": u32(payload, 232),
+                    "uplink_pool_high_bytes": u32(payload, 236),
+                    "usb_reconnect": u32(payload, 244),
+                    "usb_forced_reset": u32(payload, 248),
+                    "passive_violation": u32(payload, 252),
+                    "capture_invalid_reason": u32(payload, 256),
+                })
 
     def summary(self) -> str:
         parts = [
@@ -488,6 +554,16 @@ class GapTracker:
             "can_fifo_overflow_total",
             "can_q_high",
             "mcp_drain_budget_hit",
+            "fw_profile",
+            "vehicle_impact",
+            "passive_violation",
+            "can_rx_task_max_us",
+            "uplink_pool_high_bytes",
+            "pool_alloc_fail",
+            "can_truth_pool_fail",
+            "descriptor_high",
+            "usb_reconnect",
+            "usb_forced_reset",
         ):
             if key in self.last_health:
                 parts.append(f"{key}={self.last_health[key]}")

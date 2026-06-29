@@ -239,12 +239,12 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `22` fault lockout cleared
 - `23` firmware identity boot marker. `detail low byte` is identity payload
   version, `detail high byte` is dirty flag, `counter` is firmware build id.
-- `24` serial TX backpressure recovered or deferred TX loss accounting.
-  `detail` is duration ms for recovered CDC backpressure, or a capped pending
-  frame count for deferred CAN segment loss accounting. `counter` is the
-  relevant total counter.
-- `25` uplink staging clear. `detail` is clear reason and `counter` is dropped
-  staged byte count.
+- `24` serial TX backpressure recovered. `detail` is duration ms for recovered
+  CDC backpressure and `counter` is the serial backpressure total.
+- `25` legacy uplink staging clear. Product firmware must not emit this because
+  connected/disconnected typed-frame clear is forbidden.
+- `26` CAN_RX_SEGMENT enqueue failed/loss accounting. `detail` is the capped
+  pending CAN frame count and `counter` is `can_segment_enqueue_fail_total`.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.
@@ -253,21 +253,21 @@ Serial CDC uplink policy:
   firmware time budget.
 - `BOARD_EVENT` code `24` is not emitted repeatedly while CDC remains blocked.
   Ordinary CDC backpressure is reported as diagnostic evidence after recovery;
-  explicit loss accounting may be deferred and emitted once with critical
-  priority after the critical queue can accept it.
+  CAN_RX_SEGMENT loss accounting is reported separately with code `26` and
+  critical priority after the critical queue can accept it.
 - Admission suppression caused by CDC backpressure or queue pressure is policy
   drop, not a serial enqueue failure. Serial enqueue failure counters are
   reserved for not-ready/no-space/hard staging failures.
-- `BOARD_EVENT` code `25` means bytes were actually discarded from the uplink
-  staging path. It must only be emitted for real stale-byte discard paths such
-  as disconnect handling, and `counter` must be the discarded byte count.
+- `BOARD_EVENT` code `25` is retained for historical decode compatibility only.
+  Product firmware has no stale-byte clear API, so this event and the matching
+  health clear counters must remain 0.
 - Priority admission is applied before any record is serialized into bytes.
-  The production CSM keeps separate critical, normal, and diagnostic record
-  queues. This structurally replaces the old byte-ring reserve model: normal
-  and diagnostic records cannot consume the critical queue capacity.
-- The default critical queue depth is 16 records, which is roughly an 8 KiB
-  reserve at the current 512-byte maximum typed payload. Normal and diagnostic
-  queues are intentionally smaller bounded buffers.
+  The production CSM uses a fixed payload pool plus priority descriptor queues:
+  critical control/fault, CAN truth, normal health/state, and diagnostic. The
+  descriptor queues do not contain 512-byte payload copies.
+- The large payload pool has a CAN truth reserve. Normal and diagnostic records
+  cannot consume that reserve, so repeated MCP/debug/profiler traffic cannot
+  block `CAN_RX_SEGMENT` storage.
 - A typed frame must be atomically staged for CDC output. Implementations must
   calculate the full typed frame length, verify that the active typed-frame
   staging buffer is free, then stage all bytes or stage none.
@@ -277,7 +277,8 @@ Serial CDC uplink policy:
   CDC staging buffer. Reordering across priority queues therefore changes only
   which pending record is sent next; the typed stream sequence remains
   contiguous in actual byte-stream order.
-- Critical reserve users include `CAN_RX_SEGMENT`, `CONTROL_ACK`, `CAN_TX_RAW`,
+- CAN truth reserve users include `CAN_RX_SEGMENT` and legacy `CAN_RX_RAW`.
+  Critical control/fault users include `CONTROL_ACK`, `CAN_TX_RAW`,
   fault/safety transitions, and explicit loss accounting.
 - Diagnostic records include debug, profiler, repeated MCP status/error, and
   verbose log events.
@@ -420,6 +421,27 @@ Extended 192-byte `CAPABILITY` payload:
 - `132..143 git short sha ASCII, zero-padded`
 - `144..191 PlatformIO env name ASCII, zero-padded`
 
+Extended 224-byte `CAPABILITY` payload:
+- `0..191`: same as the 192-byte payload.
+- `192 firmware_profile u8`: `1` Passive Product, `2` Full Instrumented.
+- `193 profile_lock_state u8`: `1` compile-time locked profile.
+- `194 vehicle_impact_state u8`: `1` possible, `2` configured passive,
+  `3` verified passive.
+- `195 host_command_rx u8`: nonzero means host downlink parser is compiled in.
+- `196 control_path u8`: nonzero means host/control CAN TX path exists.
+- `197 usb_backpressure_isolated u8`: uplink pressure is isolated from CAN RX
+  frontend timing by fixed CAN RX ring plus bounded telemetry queues.
+- `198 dtr_reset_sensitive u8`: nonzero means USB CDC disconnect may force MCU
+  reset after timeout.
+- `199 passive_acceptance_allowed u8`: nonzero only when passive firmware and
+  hardware/bench safety case are both verified.
+- `200..203 hardware_safety_case_id u32`
+- `204..207 bench_verification_id u32`
+- `208..211 bus0 passive extension`: mode, ack capability, error-frame
+  capability, transceiver reset-safe.
+- `212..215 bus1 passive extension`: same layout as bus0.
+- `216..223 reserved`
+
 Extended 128-byte `BOARD_HEALTH` payload:
 - `0..51`: same prefix as the original 52-byte health payload.
 - `52 health_payload_version u8`: `2` for the old extended payload, `4` for the
@@ -453,8 +475,11 @@ Extended 192-byte `BOARD_HEALTH v4` payload:
 - `152..155 bus1_queue_depth u32`
 - `156..159 bus1_queue_high_water u32`
 - `160..163 serial_enqueue_fail_total u32`
-- `164..167 serial_ring_clear_total u32`
-- `168..171 serial_ring_cleared_bytes_total u32`
+- `164..167 serial_ring_clear_total u32`: compatibility/watchdog field; product
+  firmware must keep this at 0 because connected/disconnected TX clear is
+  forbidden
+- `168..171 serial_ring_cleared_bytes_total u32`: compatibility/watchdog field;
+  product firmware must keep this at 0
 - `172..175 serial_backpressure_total u32`
 - `176..179 uplink_tx_high_water_bytes u32`: maximum observed bytes waiting in
   record queues or in the active typed-frame CDC staging buffer
@@ -462,9 +487,33 @@ Extended 192-byte `BOARD_HEALTH v4` payload:
 - `184..187 MCP drain time-budget-hit total u32`
 - `188..191 CAN_RX_SEGMENT enqueue-failed frame total u32`
 
+Extended 224-byte `BOARD_HEALTH v5` payload:
+- `0..191`: same as the 192-byte v4 payload.
+- `192..195 uplink large-pool used blocks u32`
+- `196..199 uplink large-pool capacity blocks u32`
+- `200..203 uplink large-pool CAN reserve used blocks u32`
+- `204..207 CAN truth descriptor queue high-water u32`
+- `208..211 payload pool allocation failure total u32`
+- `212..215 CAN truth payload pool allocation failure total u32`
+- `216..219 descriptor queue combined high-water u32`
+- `220..223 diagnostic suppression/drop total u32`
+
+Extended 260-byte `BOARD_HEALTH v6` payload:
+- `0..223`: same as the 224-byte v5 payload.
+- `224..227 firmware_profile u32`
+- `228..231 vehicle_impact_state u32`
+- `232..235 can_rx_task_max_us u32`
+- `236..239 uplink_pool_high_water_bytes u32`
+- `240..243 uplink_descriptor_high_water u32`
+- `244..247 usb_reconnect_count u32`
+- `248..251 usb_forced_reset_count u32`
+- `252..255 passive_violation_latch u32`
+- `256..259 capture_invalid_reason u32`
+
 Mid Carrier MCP2515 profile major `3` descriptor default:
-- `bus_count` is build-profile driven. Single-lane MCP profiles use
-  `bus_count=1`. The final dual CSM profile uses `bus_count=2`.
+- `bus_count` is build-profile driven. Passive Product currently exposes the
+  listen-only MCP2515 lane as `bus_count=1`. Full Instrumented dual CSM exposes
+  both MCP2515/TJA1050 and Mid Carrier J4/U2 as `bus_count=2`.
 - descriptor 0 describes `bus=0` MCP2515/TJA1050.
 - descriptor 1, when present, describes `bus=1` Mid Carrier J4/U2 through the
   Arduino CAN single-object backend.
@@ -475,7 +524,10 @@ Mid Carrier MCP2515 profile major `3` descriptor default:
   from this descriptor, not from the bus number.
 - physical backend `1` MCP2515, transceiver `1` TJA1050.
 - `rx_supported=1`, `tx_supported=1`, `control_tx_allowed=1` when
-  `portenta_h7_m7_mid_mcp2515_csm` is built.
+  a Full Instrumented active-capable env is built. Passive Product must report
+  `tx_supported=0`, `control_tx_allowed=0`, downlink mask `0`, MCP listen-only
+  bus mode, and `passive_acceptance_allowed=0` until hardware and bench safety
+  evidence are supplied.
 - Classic CAN supported, CAN FD unsupported, max live DLC `8`, nominal bitrate
   `500000`, data bitrate `0`.
 

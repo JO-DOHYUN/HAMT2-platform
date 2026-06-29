@@ -36,6 +36,7 @@ struct CapabilityPayloadConfig {
   bool include_v2 = false;
   bool include_v3 = false;
   bool include_v4 = false;
+  bool include_v5 = false;
   uint8_t bus_count = 0;
   uint16_t capability_v2_flags = 0;
   uint32_t supported_uplink_records = 0;
@@ -54,6 +55,20 @@ struct CapabilityPayloadConfig {
   uint16_t serial_ring_kib = 0;
   const char* firmware_git_sha = "unknown";
   const char* firmware_env_name = "unknown";
+  uint8_t firmware_profile = 0;
+  uint8_t profile_lock_state = 0;
+  uint8_t vehicle_impact_state = 0;
+  uint8_t host_command_rx = 0;
+  uint8_t control_path = 0;
+  uint8_t usb_backpressure_isolated = 0;
+  uint8_t dtr_reset_sensitive = 0;
+  uint8_t passive_acceptance_allowed = 0;
+  uint32_t hardware_safety_case_id = 0;
+  uint32_t bench_verification_id = 0;
+  uint8_t bus_mode[2] = {};
+  uint8_t bus_ack_capability[2] = {};
+  uint8_t bus_error_frame_capability[2] = {};
+  uint8_t bus_transceiver_reset_safe[2] = {};
   CapabilityBusDescriptor buses[2] = {};
 };
 

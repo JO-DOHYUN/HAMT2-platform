@@ -64,7 +64,6 @@ class SerialTxScheduler {
   bool enqueueAtomic(const uint8_t* data, uint32_t len, UplinkPriority priority);
   SerialTxServiceResult service(uint32_t byte_budget, uint32_t now_ms, uint32_t now_us);
 
-  uint32_t clearDisconnectedStale();
   const SerialTxCounters& counters() const { return counters_; }
 
  private:

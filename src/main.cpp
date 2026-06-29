@@ -62,6 +62,26 @@
 #define BOARD_ENABLE_MCP2515_INIT BOARD_ENABLE_MCP2515
 #endif
 
+#ifndef BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#define BOARD_CSM_PROFILE_PASSIVE_PRODUCT 0
+#endif
+
+#ifndef BOARD_CSM_PROFILE_FULL_INSTRUMENTED
+#define BOARD_CSM_PROFILE_FULL_INSTRUMENTED (!BOARD_CSM_PROFILE_PASSIVE_PRODUCT)
+#endif
+
+#ifndef BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE
+#define BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE 0
+#endif
+
+#ifndef BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID
+#define BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID 0
+#endif
+
+#ifndef BOARD_PASSIVE_BENCH_VERIFICATION_ID
+#define BOARD_PASSIVE_BENCH_VERIFICATION_ID 0
+#endif
+
 #ifndef BOARD_ENABLE_TIM3_ENCODER
 #define BOARD_ENABLE_TIM3_ENCODER 0
 #endif
@@ -244,6 +264,10 @@
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
 #define BOARD_ENABLE_BUILTIN_CAN_LANE (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN)
 
+#ifndef BOARD_ENABLE_HOST_DOWNLINK
+#define BOARD_ENABLE_HOST_DOWNLINK BOARD_ENABLE_HOST_CAN_TX_ANY
+#endif
+
 #ifndef BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
 #define BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND 0
 #endif
@@ -320,6 +344,27 @@
 #define BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX BOARD_ENABLE_BUILTIN_CAN_RX
 #endif
 
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#if BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515
+#error "Passive Product must compile out host CAN TX paths"
+#endif
+#if BOARD_ENABLE_HOST_DOWNLINK
+#error "Passive Product must compile out HostDownlinkParser processing"
+#endif
+#if BOARD_MCP2515_CONTROL_TX_ALLOWED || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#error "Passive Product must compile out control TX allowance"
+#endif
+#if BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
+#error "Passive Product must compile out CAN TX test paths"
+#endif
+#if !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
+#error "Passive Product MCP2515 must default to listen-only"
+#endif
+#if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
+#error "Passive Product must disable USB CDC reconnect reset"
+#endif
+#endif
+
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
 #include <Arduino_CAN.h>
 #endif
@@ -331,6 +376,25 @@
 
 // Build-time mode switch. Keep false for real CAN capture.
 static constexpr bool kTestMode = false;
+
+static constexpr uint8_t kFirmwareProfileUnknown = 0;
+static constexpr uint8_t kFirmwareProfilePassiveProduct = 1;
+static constexpr uint8_t kFirmwareProfileFullInstrumented = 2;
+static constexpr uint8_t kProfileLockCompileTime = 1;
+static constexpr uint8_t kVehicleImpactUnknown = 0;
+static constexpr uint8_t kVehicleImpactPossible = 1;
+static constexpr uint8_t kVehicleImpactConfiguredPassive = 2;
+static constexpr uint8_t kVehicleImpactVerifiedPassive = 3;
+static constexpr uint8_t kBusModeUnknown = 0;
+static constexpr uint8_t kBusModeListenOnly = 1;
+static constexpr uint8_t kBusModeHardwareSilent = 2;
+static constexpr uint8_t kBusModeNormal = 3;
+
+static constexpr uint32_t kPassiveViolationSerialDownlinkProcessed = (1u << 0);
+static constexpr uint32_t kPassiveViolationCanTxCalled = (1u << 1);
+static constexpr uint32_t kPassiveViolationMcpNormalMode = (1u << 2);
+static constexpr uint32_t kPassiveViolationUsbResetAttempted = (1u << 3);
+static constexpr uint32_t kPassiveViolationTransceiverSafeMissing = (1u << 4);
 
 #if BOARD_ENABLE_MCP2515
 static constexpr CAN_SPEED kMcp2515Bitrate = CAN_500KBPS;
@@ -354,8 +418,10 @@ using csm::kCapabilityV2BusDescriptorLen;
 using csm::kCapabilityV2PayloadLen;
 using csm::kCapabilityV3PayloadLen;
 using csm::kCapabilityV4PayloadLen;
+using csm::kCapabilityV5PayloadLen;
 using csm::kBoardHealthV2PayloadLen;
 using csm::kBoardHealthV4PayloadLen;
+using csm::kBoardHealthV6PayloadLen;
 using csm::kCanRxSegmentEntryLen;
 using csm::kCanRxSegmentHeaderLen;
 using csm::kCanRxSegmentMaxFrames;
@@ -402,6 +468,7 @@ enum BoardEventCode : uint16_t {
   EventFirmwareIdentity = 23,
   EventSerialTxBackpressure = 24,
   EventSerialTxRingClear = 25,
+  EventCanRxSegmentEnqueueFailed = 26,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -469,6 +536,10 @@ static_assert(csm::encoded_typed_frame_len(kCanRxSegmentHeaderLen +
               "CAN_RX_SEGMENT typed frame must fit within one 512-byte USB HS packet");
 static_assert(BOARD_UPLINK_CRITICAL_QUEUE_RECORDS >= 8,
               "critical uplink queue must reserve enough loss-evidence records");
+static_assert(BOARD_UPLINK_CAN_TRUTH_QUEUE_RECORDS >= 16,
+              "CAN truth queue must absorb high-load segment bursts");
+static_assert(BOARD_UPLINK_POOL_LARGE_BLOCKS > BOARD_UPLINK_POOL_LARGE_CAN_RESERVE,
+              "large pool must leave non-CAN space for health/capability records");
 static_assert(BOARD_UPLINK_NORMAL_QUEUE_RECORDS >= 4,
               "normal uplink queue must absorb health/capability bursts");
 static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
@@ -578,6 +649,53 @@ static bool mcp2515_listen_only_mode = false;
 #endif
 static bool usb_host_was_connected = false;
 static uint32_t usb_disconnected_since_ms = 0;
+static uint32_t usb_reconnect_count = 0;
+static uint32_t usb_forced_reset_count = 0;
+static uint32_t passive_violation_latch = 0;
+static uint32_t can_rx_task_max_us = 0;
+static uint32_t uplink_pool_high_water_bytes = 0;
+static uint32_t capture_invalid_reason = 0;
+
+static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  passive_violation_latch |= mask;
+#else
+  (void)mask;
+#endif
+}
+
+static uint8_t firmware_profile_id() {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  return kFirmwareProfilePassiveProduct;
+#elif BOARD_CSM_PROFILE_FULL_INSTRUMENTED
+  return kFirmwareProfileFullInstrumented;
+#else
+  return kFirmwareProfileUnknown;
+#endif
+}
+
+static uint8_t vehicle_impact_state() {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  return (BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE &&
+          BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID != 0 &&
+          BOARD_PASSIVE_BENCH_VERIFICATION_ID != 0)
+             ? kVehicleImpactVerifiedPassive
+             : kVehicleImpactConfiguredPassive;
+#else
+  return kVehicleImpactPossible;
+#endif
+}
+
+static uint8_t __attribute__((unused)) passive_acceptance_allowed() {
+  return vehicle_impact_state() == kVehicleImpactVerifiedPassive ? 1 : 0;
+}
+
+static void note_can_rx_task_elapsed(uint32_t start_us) {
+  const uint32_t elapsed = static_cast<uint32_t>(micros() - start_us);
+  if (elapsed > can_rx_task_max_us) {
+    can_rx_task_max_us = elapsed;
+  }
+}
 
 static void reset_can_init_retry_backoff() {
   can_init_retry_delay_ms = BOARD_MCP2515_INIT_RETRY_MIN_MS;
@@ -627,8 +745,16 @@ static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_P
 
 static void service_usb_cdc_reconnect_watchdog() {
 #if defined(SERIAL_CDC)
+#if BOARD_USB_CDC_RECONNECT_RESET_MS == 0
+  (void)usb_host_was_connected;
+  (void)usb_disconnected_since_ms;
+  return;
+#else
   const bool connected = _SerialUSB.connected();
   if (connected) {
+    if (usb_disconnected_since_ms != 0) {
+      usb_reconnect_count++;
+    }
     usb_host_was_connected = true;
     usb_disconnected_since_ms = 0;
     return;
@@ -641,17 +767,16 @@ static void service_usb_cdc_reconnect_watchdog() {
   const uint32_t now_ms = millis();
   if (usb_disconnected_since_ms == 0) {
     usb_disconnected_since_ms = now_ms;
-    const uint32_t dropped_bytes = serial_tx_scheduler.clearDisconnectedStale();
-    if (dropped_bytes > 0) {
-      emit_board_event(EventSerialTxRingClear, 2, dropped_bytes);
-    }
     return;
   }
 
   if (now_ms - usb_disconnected_since_ms >= BOARD_USB_CDC_RECONNECT_RESET_MS) {
+    usb_forced_reset_count++;
+    latch_passive_violation(kPassiveViolationUsbResetAttempted);
     delay(10);
     NVIC_SystemReset();
   }
+#endif
 #endif
 }
 
@@ -678,6 +803,7 @@ static bool uplink_tx_pressure_active() {
 
 static bool should_suppress_low_value_record(RecordType type, UplinkPriority priority) {
   if (priority == UplinkPriority::Critical ||
+      priority == UplinkPriority::CanTruth ||
       type == RecordType::Capability ||
       type == RecordType::BoardHealth) {
     return false;
@@ -757,7 +883,7 @@ static void service_deferred_loss_events() {
   const uint16_t detail = pending_can_segment_enqueue_fail_frames > 0xFFFFu
                               ? 0xFFFFu
                               : static_cast<uint16_t>(pending_can_segment_enqueue_fail_frames);
-  if (emit_board_event_with_priority(EventSerialTxBackpressure, detail,
+  if (emit_board_event_with_priority(EventCanRxSegmentEnqueueFailed, detail,
                                      can_segment_enqueue_fail_total,
                                      UplinkPriority::Critical)) {
     pending_can_segment_enqueue_fail_frames = 0;
@@ -784,8 +910,10 @@ using csm::ControlReasonSafetyLockout;
 using csm::ControlReasonUnsupportedFrame;
 using csm::ControlReasonUnsupportedCommand;
 
-static void emit_control_ack(uint32_t command_id, uint8_t status, uint8_t reason, uint8_t bus,
-                             uint32_t can_id_flags, uint8_t dlc, uint32_t counter) {
+static void __attribute__((unused)) emit_control_ack(uint32_t command_id, uint8_t status,
+                                                     uint8_t reason, uint8_t bus,
+                                                     uint32_t can_id_flags, uint8_t dlc,
+                                                     uint32_t counter) {
   uint8_t payload[28];
   memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
@@ -885,23 +1013,31 @@ static void emit_capability() {
   config.capability_v2_flags = 0x0003;
   config.supported_uplink_records =
       (1u << static_cast<uint8_t>(RecordType::CanRxRaw)) |
-      (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
       (1u << static_cast<uint8_t>(RecordType::AdcSample)) |
-      (1u << static_cast<uint8_t>(RecordType::ControlAck)) |
       (1u << static_cast<uint8_t>(RecordType::BoardEvent)) |
       (1u << static_cast<uint8_t>(RecordType::BoardHealth)) |
       (1u << static_cast<uint8_t>(RecordType::Capability)) |
       (1u << static_cast<uint8_t>(RecordType::CanRxSegment));
+#if BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
+      (1u << static_cast<uint8_t>(RecordType::ControlAck));
+#endif
+#if BOARD_ENABLE_HOST_DOWNLINK
   config.supported_downlink_records =
       (1u << static_cast<uint8_t>(RecordType::HostCanTxRequest)) |
       (1u << static_cast<uint8_t>(RecordType::HostHeartbeat)) |
       (1u << static_cast<uint8_t>(RecordType::HostControlSession)) |
       (1u << static_cast<uint8_t>(RecordType::HostQueryCapability)) |
       (1u << static_cast<uint8_t>(RecordType::HostClearFaultLockout));
+#else
+  config.supported_downlink_records = 0;
+#endif
   config.safety_feature_flags = 0x0000000Fu;
-  config.host_tx_queue_size = 32;
+  config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY ? 32 : 0;
   config.capability_v3_flags = 0x0001;
   config.include_v4 = true;
+  config.include_v5 = true;
   config.firmware_build_id = CSM_FW_BUILD_ID;
   config.firmware_identity_version = 1;
   config.firmware_dirty = CSM_FW_GIT_DIRTY != 0;
@@ -916,6 +1052,16 @@ static void emit_capability() {
   config.serial_ring_kib = static_cast<uint16_t>(kSerialTxRingSize / 1024);
   config.firmware_git_sha = CSM_FW_GIT_SHA;
   config.firmware_env_name = CSM_FW_ENV_NAME;
+  config.firmware_profile = firmware_profile_id();
+  config.profile_lock_state = kProfileLockCompileTime;
+  config.vehicle_impact_state = vehicle_impact_state();
+  config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
+  config.control_path = BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0;
+  config.usb_backpressure_isolated = 1;
+  config.dtr_reset_sensitive = BOARD_USB_CDC_RECONNECT_RESET_MS != 0 ? 1 : 0;
+  config.passive_acceptance_allowed = passive_acceptance_allowed();
+  config.hardware_safety_case_id = BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID;
+  config.bench_verification_id = BOARD_PASSIVE_BENCH_VERIFICATION_ID;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   config.capability_v2_flags |= (1u << 2);
 #endif
@@ -940,6 +1086,10 @@ static void emit_capability() {
       mcp_control_runtime_allowed,
       BOARD_MCP2515_CAPABILITY_TERMINATION_POLICY,
       BOARD_MCP2515_CAPABILITY_ISOLATION_POLICY);
+  config.bus_mode[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? kBusModeListenOnly : kBusModeNormal;
+  config.bus_ack_capability[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1;
+  config.bus_error_frame_capability[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1;
+  config.bus_transceiver_reset_safe[0] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
@@ -951,6 +1101,10 @@ static void emit_capability() {
       BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
       0,
       0);
+  config.bus_mode[1] = kBusModeNormal;
+  config.bus_ack_capability[1] = 1;
+  config.bus_error_frame_capability[1] = 1;
+  config.bus_transceiver_reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #endif
 #else
   config.buses[0] = make_capability_bus_descriptor(
@@ -970,6 +1124,15 @@ static void emit_capability() {
       0,
       2,
       1);
+  config.bus_mode[0] =
+#if BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
+      kBusModeNormal;
+#else
+      kBusModeHardwareSilent;
+#endif
+  config.bus_ack_capability[0] = BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND ? 1 : 0;
+  config.bus_error_frame_capability[0] = BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND ? 1 : 0;
+  config.bus_transceiver_reset_safe[0] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
@@ -981,10 +1144,14 @@ static void emit_capability() {
       BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
       0,
       0);
+  config.bus_mode[1] = BOARD_ENABLE_BUILTIN_CAN_RX ? kBusModeNormal : kBusModeHardwareSilent;
+  config.bus_ack_capability[1] = BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0;
+  config.bus_error_frame_capability[1] = BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0;
+  config.bus_transceiver_reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #endif
 #endif
 
-  uint8_t payload[kCapabilityV4PayloadLen];
+  uint8_t payload[kCapabilityV5PayloadLen];
   const uint16_t payload_len = csm::board::build_capability_payload(config, payload, sizeof(payload));
   if (payload_len > 0) {
     emit_record(RecordType::Capability, payload, payload_len);
@@ -1253,7 +1420,7 @@ static bool emit_can_rx_segment_payload(const CanRxItem* items, uint8_t count, u
   }
 
   const uint16_t payload_len = static_cast<uint16_t>(kCanRxSegmentHeaderLen + count * kCanRxSegmentEntryLen);
-  if (enqueue_typed_record(RecordType::CanRxSegment, payload, payload_len, UplinkPriority::Critical)) {
+  if (enqueue_typed_record(RecordType::CanRxSegment, payload, payload_len, UplinkPriority::CanTruth)) {
     return true;
   }
 
@@ -1299,7 +1466,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
-  uint8_t payload[kBoardHealthV4PayloadLen];
+  uint8_t payload[kBoardHealthV6PayloadLen];
   memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
   wr_u32_le(&payload[8], can_rx_count_total);
@@ -1331,7 +1498,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
                      : 0;
   payload[47] |= uplink_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
-  payload[52] = 4;  // BOARD_HEALTH payload version.
+  payload[52] = 6;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
   payload[54] = static_cast<uint8_t>(safety_supervisor.state());
   payload[55] = safety_supervisor.faultBits();
@@ -1389,6 +1556,30 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[184], mcp_service.drain_time_budget_hit_total);
 #endif
   wr_u32_le(&payload[188], can_segment_enqueue_fail_total);
+  wr_u32_le(&payload[192], uplink_scheduler.poolLargeUsed());
+  wr_u32_le(&payload[196], BOARD_UPLINK_POOL_LARGE_BLOCKS);
+  wr_u32_le(&payload[200], uplink_scheduler.poolLargeCanReserveUsed());
+  wr_u32_le(&payload[204], uplink_counters.can_truth_queue_high_water);
+  wr_u32_le(&payload[208], uplink_counters.pool_alloc_fail_total);
+  wr_u32_le(&payload[212], uplink_counters.can_truth_pool_alloc_fail_total);
+  wr_u32_le(&payload[216], uplink_counters.descriptor_high_water_total);
+  wr_u32_le(&payload[220], uplink_counters.diagnostic_suppressed_total);
+  const uint32_t pool_high_bytes =
+      uplink_counters.pool_large_used_high_water * csm::kMaxPayloadLen +
+      uplink_counters.pool_medium_used_high_water * 128u +
+      uplink_counters.pool_small_used_high_water * 64u;
+  if (pool_high_bytes > uplink_pool_high_water_bytes) {
+    uplink_pool_high_water_bytes = pool_high_bytes;
+  }
+  wr_u32_le(&payload[224], firmware_profile_id());
+  wr_u32_le(&payload[228], vehicle_impact_state());
+  wr_u32_le(&payload[232], can_rx_task_max_us);
+  wr_u32_le(&payload[236], uplink_pool_high_water_bytes);
+  wr_u32_le(&payload[240], uplink_counters.descriptor_high_water_total);
+  wr_u32_le(&payload[244], usb_reconnect_count);
+  wr_u32_le(&payload[248], usb_forced_reset_count);
+  wr_u32_le(&payload[252], passive_violation_latch);
+  wr_u32_le(&payload[256], capture_invalid_reason);
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
 }
 
@@ -1474,7 +1665,7 @@ static bool should_enable_can_tx_gate_for_test() {
 #endif
 }
 
-static bool control_backend_ready_for_bus(uint8_t bus) {
+static bool __attribute__((unused)) control_backend_ready_for_bus(uint8_t bus) {
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
   if (bus == BOARD_MCP2515_BUS_ID) {
     return can_backend_ok && mcp2515 != nullptr;
@@ -1772,7 +1963,7 @@ static bool init_can_backend() {
 #if BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
       mcp2515->setListenOnlyMode();
 #else
-      mcp2515->setNormalMode();
+      (latch_passive_violation(kPassiveViolationMcpNormalMode), mcp2515->setNormalMode());
 #endif
 #if BOARD_MCP2515_TX_USE_ONESHOT
   if (err == MCP2515::ERROR_OK && !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) {
@@ -1861,6 +2052,7 @@ static void pump_can_rx_to_queue(int budget) {
 
     can_queue_push(item);
   }
+  note_can_rx_task_elapsed(start_us);
   service_mcp2515_status_after_drain(saw_error);
 #else
   (void)budget;
@@ -1981,6 +2173,7 @@ static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus
   }
 #if BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
   if (mcp2515_listen_only_mode) {
+    latch_passive_violation(kPassiveViolationMcpNormalMode);
     const MCP2515::ERROR mode_err = mcp2515->setNormalMode();
     if (mode_err != MCP2515::ERROR_OK) {
       return mode_err;
@@ -2014,6 +2207,7 @@ static MCP2515::ERROR __attribute__((unused)) start_mcp2515_tx_audit(uint8_t bus
   mcp2515->clearMERR();
   mcp2515->clearERRIF();
 
+  latch_passive_violation(kPassiveViolationCanTxCalled);
   const MCP2515::ERROR err = mcp2515->sendMessage(MCP2515::TXB0, &msg);
   if (err != MCP2515::ERROR_OK) {
     return err;
@@ -2132,6 +2326,7 @@ static void service_mcp2515_tx_audit() {
 }
 #endif
 
+#if BOARD_ENABLE_HOST_DOWNLINK
 static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
 #if BOARD_ENABLE_HOST_CAN_TX_ANY
   uint32_t command_id = 0;
@@ -2258,6 +2453,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
 
   const uint32_t arduino_id = extended ? arduino::CanExtendedId(can_id) : arduino::CanStandardId(can_id);
   CanMsg msg(arduino_id, dlc, data);
+  latch_passive_violation(kPassiveViolationCanTxCalled);
   const int rc = CAN.write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
@@ -2451,9 +2647,16 @@ static csm::board::HostDownlinkParser host_downlink_parser(
 static void service_host_downlink(int budget) {
   host_downlink_parser.service(Serial, budget);
 }
+#else
+static void service_host_downlink(int budget) {
+  while (budget-- > 0 && Serial.available() > 0) {
+    (void)Serial.read();
+  }
+}
+#endif
 
-static void service_builtin_can_tx_test() {
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
+static void service_builtin_can_tx_test() {
   if (!builtin_can_tx_ok) {
     return;
   }
@@ -2477,6 +2680,7 @@ static void service_builtin_can_tx_test() {
   };
 
   CanMsg msg(arduino::CanStandardId(BOARD_BUILTIN_CAN_TX_TEST_ID), sizeof(data), data);
+  latch_passive_violation(kPassiveViolationCanTxCalled);
   const int rc = CAN.write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
@@ -2489,11 +2693,11 @@ static void service_builtin_can_tx_test() {
   builtin_can_tx_total++;
   emit_can_tx_raw(BOARD_BUILTIN_CAN_BUS_ID, BOARD_BUILTIN_CAN_TX_TEST_ID, sizeof(data), data,
                   builtin_can_tx_total, builtin_can_tx_failed_total);
-#endif
 }
+#endif
 
-static void service_mcp2515_tx_test() {
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
+static void service_mcp2515_tx_test() {
   if (!can_backend_ok || mcp2515 == nullptr) {
     return;
   }
@@ -2525,8 +2729,8 @@ static void service_mcp2515_tx_test() {
     }
     return;
   }
-#endif
 }
+#endif
 
 static void test_push_fake_can_if_needed() {
   static uint32_t last_fake_us = 0;
@@ -2576,6 +2780,7 @@ static void drain_can_records(int budget) {
     }
   }
   can_rx_segment_builder.flushIfDue(micros());
+  note_can_rx_task_elapsed(start_us);
 }
 
 static void service_encoder() {
@@ -2711,11 +2916,15 @@ void loop() {
   }
 
   service_builtin_can_rx_to_queue(128);
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   service_builtin_can_tx_test();
+#endif
 #if BOARD_ENABLE_MCP2515
   service_mcp2515_tx_audit();
 #endif
+#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
   service_mcp2515_tx_test();
+#endif
   service_status_led();
   service_capability_advertisement();
   service_encoder();

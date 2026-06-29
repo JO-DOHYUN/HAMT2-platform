@@ -111,7 +111,29 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
   write_ascii_field(&payload[132], kFirmwareGitShaFieldLen, config.firmware_git_sha);
   write_ascii_field(&payload[144], kFirmwareEnvNameFieldLen, config.firmware_env_name);
 
-  return kCapabilityV4PayloadLen;
+  if (!config.include_v5 || capacity < kCapabilityV5PayloadLen) {
+    return kCapabilityV4PayloadLen;
+  }
+
+  payload[192] = config.firmware_profile;
+  payload[193] = config.profile_lock_state;
+  payload[194] = config.vehicle_impact_state;
+  payload[195] = config.host_command_rx;
+  payload[196] = config.control_path;
+  payload[197] = config.usb_backpressure_isolated;
+  payload[198] = config.dtr_reset_sensitive;
+  payload[199] = config.passive_acceptance_allowed;
+  wr_u32_le(&payload[200], config.hardware_safety_case_id);
+  wr_u32_le(&payload[204], config.bench_verification_id);
+  for (uint8_t i = 0; i < 2; ++i) {
+    const uint8_t offset = static_cast<uint8_t>(208 + i * 4);
+    payload[offset + 0] = config.bus_mode[i];
+    payload[offset + 1] = config.bus_ack_capability[i];
+    payload[offset + 2] = config.bus_error_frame_capability[i];
+    payload[offset + 3] = config.bus_transceiver_reset_safe[i];
+  }
+
+  return kCapabilityV5PayloadLen;
 }
 
 }  // namespace csm::board

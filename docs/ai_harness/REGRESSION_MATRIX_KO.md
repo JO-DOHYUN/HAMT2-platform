@@ -1,5 +1,16 @@
 # REGRESSION_MATRIX_KO
 
+## CSM Regression - passive_product
+- default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`
+- passive guard reports zero linked active symbols for host downlink/control
+  TX/CAN TX tests/MCP normal mode/USB forced reset
+- `CAPABILITY fw_profile=1`, `host_cmd_rx=0`, `control_path=0`,
+  `dtr_reset_sensitive=0`, `passive_acceptance=0` unless hardware evidence IDs
+  are explicitly configured
+- MCP2515 starts listen-only and bus0 advertises no ACK/error-frame capability
+- `BOARD_HEALTH v6 passive_violation=0`, `serial_clear=0`,
+  `serial_enqueue_fail=0` during smoke
+
 ## CSM Regression - common
 - typed frame SOF/length/CRC resync
 - `CAPABILITY` record after boot
@@ -21,8 +32,8 @@
 - PCAN sees the audited board TX frame
 - MCP INT level hint + bounded polling, no falling-edge-only gate
 
-## CSM Regression - mid_mcp2515_j4_dual_csm
-- default final env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+## CSM Regression - mid_mcp2515_j4_dual_csm_full_instrumented
+- bench/HIL env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`
 - `CAPABILITY` profile major 3 exposes `bus=0` MCP2515/TJA1050 and `bus=1`
   Mid Carrier J4/U2 descriptors
 - bus descriptor role is a non-authoritative `role_hint`; VMS must not hard-code

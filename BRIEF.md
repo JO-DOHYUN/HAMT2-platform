@@ -9,9 +9,10 @@ This is the standalone CSM board firmware repository.
 - Build and upload from this directory only:
   `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`.
 
-## Current Uploaded Baseline
+## Current Build Baseline
 - Board: Arduino Portenta H7 M7 + Mid Carrier ASX00055.
-- Production env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`.
+- Product default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`.
+- Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
 - Current board identity before this cleanup was read on COM7 as:
   - `git=4d21a3c9431`
   - `dirty=1`
@@ -23,15 +24,22 @@ This is the standalone CSM board firmware repository.
   longer depend on `C:\WORKS\VS\csm_zip_pre_wifi`.
 
 ## CSM Baseline
-- `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic CAN 2.0 500 kbps.
-- `bus=1`: Mid Carrier J4 CAN1 through onboard U2, Classic CAN 2.0 500 kbps.
+- Passive Product `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic
+  CAN 2.0 500 kbps, MCP listen-only. Host downlink/control/TX/test paths are
+  compile-time removed.
+- Full Instrumented keeps `bus=0` MCP2515/TJA1050 and `bus=1` Mid Carrier J4
+  CAN1 through onboard U2 for bench/HIL audited control tests.
 - Live production output is typed transport v1.
 - High-load receive uses `CAN_RX_SEGMENT` while preserving per-frame truth.
-- `CONTROL_ACK` is request evidence only; final CAN write evidence is
-  `CAN_TX_RAW`.
+- `CONTROL_ACK` is request evidence only in Full Instrumented; final CAN write
+  evidence is `CAN_TX_RAW`. Passive Product must not advertise either as a live
+  active capability.
 - `CAPABILITY` exposes firmware identity, bus descriptors, and build settings.
-- `BOARD_HEALTH v4` exposes bus queue/drop, serial backpressure, and MCP drain
-  diagnostics.
+- `CAPABILITY v5` exposes firmware profile, vehicle-impact state, host command
+  RX, control path, USB reset sensitivity, and passive safety evidence IDs.
+- `BOARD_HEALTH v6` preserves earlier offsets and adds uplink pool/descriptor,
+  CAN RX task max time, USB reconnect/reset counters, and passive violation
+  latch diagnostics.
 
 ## Canonical Contracts
 - Root routing: `AGENTS.md`
@@ -40,16 +48,16 @@ This is the standalone CSM board firmware repository.
 - HIL runbook: `board/docs/HIL_RUNBOOK_KO.md`
 
 ## Verification Commands
-Build production firmware:
+Build Passive Product firmware:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
 ```
 
-Upload production firmware:
+Build Full Instrumented firmware:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm -t upload
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented
 ```
 
 Decode board identity after upload:

@@ -7,7 +7,8 @@ namespace csm::board::uplink {
 enum class UplinkPriority : uint8_t {
   Diagnostic = 0,
   Normal = 1,
-  Critical = 2,
+  CanTruth = 2,
+  Critical = 3,
 };
 
 }  // namespace csm::board::uplink

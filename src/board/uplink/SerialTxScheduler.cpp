@@ -169,17 +169,6 @@ SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t 
   return result;
 }
 
-uint32_t SerialTxScheduler::clearDisconnectedStale() {
-  const uint32_t dropped_bytes = queuedBytes();
-  if (dropped_bytes > 0) {
-    counters_.ring_clear_total++;
-    counters_.ring_cleared_bytes_total += dropped_bytes;
-  }
-  resetFrame();
-  blocked_since_ms_ = 0;
-  return dropped_bytes;
-}
-
 void SerialTxScheduler::resetFrame() {
   frame_len_ = 0;
   frame_offset_ = 0;
