@@ -25,6 +25,8 @@ class CanRxSegmentBuilder {
   bool push(const CanRxSegmentItem& item, uint32_t now_us);
   bool flush();
   bool flushIfDue(uint32_t now_us);
+  void discardPending();
+  void resetForEpoch(uint64_t next_segment_seq = 0);
 
   uint8_t pendingCount() const { return pending_count_; }
   uint64_t nextSegmentSeq() const { return segment_seq_next_; }

@@ -61,6 +61,7 @@ static constexpr uint16_t kCapabilityV2PayloadLen = 80;
 static constexpr uint16_t kCapabilityV3PayloadLen = 112;
 static constexpr uint16_t kCapabilityV4PayloadLen = 192;
 static constexpr uint16_t kCapabilityV5PayloadLen = 224;
+static constexpr uint16_t kCapabilityV6PayloadLen = 272;
 static constexpr uint8_t kCapabilityV2BusDescriptorLen = 20;
 static constexpr uint16_t kAdcSamplePayloadLen = 44;
 static constexpr uint8_t kFirmwareGitShaFieldLen = 12;

@@ -144,7 +144,33 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
   payload[216] = config.usb_cdc_dtr_session_required;
   payload[217] = config.usb_cdc_dtr_session_only;
 
-  return kCapabilityV5PayloadLen;
+  if (!config.include_v6 || capacity < kCapabilityV6PayloadLen) {
+    return kCapabilityV5PayloadLen;
+  }
+
+  payload[224] = 1;  // passive hardware evidence schema version.
+  payload[225] = config.hardware_silent_strapped[0];
+  payload[226] = config.hardware_silent_strapped[1];
+  payload[227] = config.galvanic_isolated[0];
+  payload[228] = config.galvanic_isolated[1];
+  payload[229] = config.power_off_passive[0];
+  payload[230] = config.power_off_passive[1];
+  payload[231] = config.reset_safe[0];
+  payload[232] = config.reset_safe[1];
+  payload[233] = config.txd_gated[0];
+  payload[234] = config.txd_gated[1];
+  payload[235] = config.normal_enable_path_populated[0];
+  payload[236] = config.normal_enable_path_populated[1];
+  wr_u32_le(&payload[240], config.field_sku_id);
+  wr_u32_le(&payload[244], config.external_analyzer_artifact_id);
+  wr_u32_le(&payload[248], config.hotplug_pass_count);
+  wr_u32_le(&payload[252], config.host_session_epoch);
+  wr_u32_le(&payload[256], config.transport_epoch);
+  wr_u32_le(&payload[260], config.usb_attach_quarantine_total);
+  wr_u32_le(&payload[264], config.host_absent_gap_total);
+  wr_u32_le(&payload[268], config.pre_session_payload_replay_total);
+
+  return kCapabilityV6PayloadLen;
 }
 
 }  // namespace csm::board

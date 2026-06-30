@@ -32,9 +32,16 @@ repositories, not inside this project folder.
   case. It must compile out host downlink, control, CAN TX, test TX, USB
   reconnect reset, and MCP normal-mode transitions. It is not `verified_passive`
   until hardware safety case and bench verification IDs are nonzero.
+- Hardware evidence fields in `CAPABILITY` are claims and artifact references.
+  They are not proof by themselves; vehicle-impact-free PASS requires external
+  analyzer/scope/DTC evidence.
 - CDC session open/close/DTR/re-enumeration must not change MCP mode, transceiver
   mode, TX gate, or reset policy. Host absent service drains CAN front-end RX and
   records discard summary counters; it must not stage typed frame payloads.
+- USB attach quarantine is CDC/uplink/session payload cleanup only. CAN
+  front-end passive drain must continue during quarantine.
+- One-bus passive products are forbidden, but missing-bus or one-bus capability
+  mismatch diagnostics must remain visible to VSM.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source
   of truth.
 - Do not create or maintain nested `qt/`, `vsm/`, `android/`, or duplicate

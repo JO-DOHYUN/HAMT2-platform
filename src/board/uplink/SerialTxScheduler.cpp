@@ -79,6 +79,11 @@ bool SerialTxScheduler::enqueueAtomic(const uint8_t* data, uint32_t len,
   return true;
 }
 
+void SerialTxScheduler::discardActiveFrame() {
+  resetFrame();
+  blocked_since_ms_ = 0;
+}
+
 SerialTxServiceResult SerialTxScheduler::service(uint32_t byte_budget, uint32_t now_ms,
                                                  uint32_t now_us) {
   SerialTxServiceResult result;

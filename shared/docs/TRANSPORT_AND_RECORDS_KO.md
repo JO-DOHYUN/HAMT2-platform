@@ -472,6 +472,44 @@ Extended 224-byte `CAPABILITY` payload:
   or MCP normal-mode behavior.
 - `218..223 reserved`
 
+Extended 272-byte `CAPABILITY` payload:
+- `0..223`: same as the 224-byte payload.
+- `224 passive_hardware_evidence_schema u8`: currently `1`.
+- `225 hardware_silent_strapped_bus0 u8`: claim/reference only.
+- `226 hardware_silent_strapped_bus1 u8`
+- `227 galvanic_isolated_bus0 u8`
+- `228 galvanic_isolated_bus1 u8`
+- `229 power_off_passive_bus0 u8`
+- `230 power_off_passive_bus1 u8`
+- `231 reset_safe_bus0 u8`
+- `232 reset_safe_bus1 u8`
+- `233 txd_gated_bus0 u8`
+- `234 txd_gated_bus1 u8`
+- `235 normal_enable_path_populated_bus0 u8`
+- `236 normal_enable_path_populated_bus1 u8`
+- `237..239 reserved`
+- `240..243 field_sku_id u32`
+- `244..247 external_analyzer_artifact_id u32`
+- `248..251 hotplug_pass_count u32`
+- `252..255 host_session_epoch u32`
+- `256..259 transport_epoch u32`
+- `260..263 usb_attach_quarantine_total u32`
+- `264..267 host_absent_gap_total u32`
+- `268..271 pre_session_payload_replay_total u32`
+
+The hardware fields above are advertised claims and artifact references. They
+do not by themselves prove vehicle-impact-free behavior. VSM may display them
+and use them for mismatch detection, but `verified_passive` requires external
+analyzer/scope/DTC artifacts whose IDs match these fields.
+
+The product SKU is two-bus RX-only. One-bus passive products are not accepted,
+but hosts must keep the one-bus or missing-bus mismatch diagnostic so wrong
+firmware uploads are visible.
+
+`usb_attach_quarantine_total` means CDC/uplink/session payload cleanup. It must
+not imply stopping CAN front-end drain or resetting/reconfiguring MCP/CAN
+transceiver state.
+
 Extended 128-byte `BOARD_HEALTH` payload:
 - `0..51`: same prefix as the original 52-byte health payload.
 - `52 health_payload_version u8`: `2` for the old extended payload, `4` for the

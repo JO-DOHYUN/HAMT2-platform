@@ -82,6 +82,38 @@
 #define BOARD_PASSIVE_BENCH_VERIFICATION_ID 0
 #endif
 
+#ifndef BOARD_PASSIVE_FIELD_SKU_ID
+#define BOARD_PASSIVE_FIELD_SKU_ID 0
+#endif
+
+#ifndef BOARD_PASSIVE_EXTERNAL_ANALYZER_ARTIFACT_ID
+#define BOARD_PASSIVE_EXTERNAL_ANALYZER_ARTIFACT_ID 0
+#endif
+
+#ifndef BOARD_PASSIVE_HOTPLUG_PASS_COUNT
+#define BOARD_PASSIVE_HOTPLUG_PASS_COUNT 0
+#endif
+
+#ifndef BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED
+#define BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED 0
+#endif
+
+#ifndef BOARD_PASSIVE_GALVANIC_ISOLATED
+#define BOARD_PASSIVE_GALVANIC_ISOLATED 0
+#endif
+
+#ifndef BOARD_PASSIVE_POWER_OFF_PASSIVE
+#define BOARD_PASSIVE_POWER_OFF_PASSIVE 0
+#endif
+
+#ifndef BOARD_PASSIVE_TXD_GATED
+#define BOARD_PASSIVE_TXD_GATED 0
+#endif
+
+#ifndef BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED
+#define BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED 1
+#endif
+
 #ifndef BOARD_ENABLE_TIM3_ENCODER
 #define BOARD_ENABLE_TIM3_ENCODER 0
 #endif
@@ -432,6 +464,7 @@ using csm::kCapabilityV2PayloadLen;
 using csm::kCapabilityV3PayloadLen;
 using csm::kCapabilityV4PayloadLen;
 using csm::kCapabilityV5PayloadLen;
+using csm::kCapabilityV6PayloadLen;
 using csm::kBoardHealthV2PayloadLen;
 using csm::kBoardHealthV4PayloadLen;
 using csm::kBoardHealthV6PayloadLen;
@@ -695,6 +728,11 @@ static uint32_t host_absent_duration_ms_total = 0;
 static uint32_t host_absent_started_ms = 0;
 static uint32_t host_absent_last_duration_ms = 0;
 static bool host_absent_summary_pending = false;
+static uint32_t host_session_epoch = 0;
+static uint32_t transport_epoch = 0;
+static uint32_t usb_attach_quarantine_total = 0;
+static uint32_t host_absent_gap_total = 0;
+static uint32_t pre_session_payload_replay_total = 0;
 static uint32_t passive_readback_total = 0;
 static uint32_t passive_readback_violation_total = 0;
 static uint32_t txreq_violation_total = 0;
@@ -718,11 +756,19 @@ static uint8_t firmware_profile_id() {
 #endif
 }
 
+static void discard_can_queue_for_session_quarantine();
+
 static uint8_t vehicle_impact_state() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   return (BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE &&
+          BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED &&
+          BOARD_PASSIVE_POWER_OFF_PASSIVE &&
+          BOARD_PASSIVE_TXD_GATED &&
+          !BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED &&
           BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID != 0 &&
-          BOARD_PASSIVE_BENCH_VERIFICATION_ID != 0)
+          BOARD_PASSIVE_BENCH_VERIFICATION_ID != 0 &&
+          BOARD_PASSIVE_EXTERNAL_ANALYZER_ARTIFACT_ID != 0 &&
+          BOARD_PASSIVE_HOTPLUG_PASS_COUNT > 0)
              ? kVehicleImpactVerifiedPassive
              : kVehicleImpactConfiguredPassive;
 #else
@@ -732,6 +778,12 @@ static uint8_t vehicle_impact_state() {
 
 static uint8_t __attribute__((unused)) passive_acceptance_allowed() {
   return vehicle_impact_state() == kVehicleImpactVerifiedPassive ? 1 : 0;
+}
+
+static void discard_session_uplink_payloads() {
+  can_rx_segment_builder.discardPending();
+  discard_can_queue_for_session_quarantine();
+  uplink_scheduler.discardQueuedRecords();
 }
 
 static void note_can_rx_task_elapsed(uint32_t start_us) {
@@ -1101,6 +1153,7 @@ static void emit_capability() {
   config.capability_v3_flags = 0x0001;
   config.include_v4 = true;
   config.include_v5 = true;
+  config.include_v6 = true;
   config.firmware_build_id = CSM_FW_BUILD_ID;
   config.firmware_identity_version = 1;
   config.firmware_dirty = CSM_FW_GIT_DIRTY != 0;
@@ -1127,6 +1180,26 @@ static void emit_capability() {
   config.usb_cdc_dtr_session_only = BOARD_USB_CDC_DTR_SESSION_ONLY ? 1 : 0;
   config.hardware_safety_case_id = BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID;
   config.bench_verification_id = BOARD_PASSIVE_BENCH_VERIFICATION_ID;
+  config.hardware_silent_strapped[0] = BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED ? 1 : 0;
+  config.hardware_silent_strapped[1] = BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED ? 1 : 0;
+  config.galvanic_isolated[0] = BOARD_PASSIVE_GALVANIC_ISOLATED ? 1 : 0;
+  config.galvanic_isolated[1] = BOARD_PASSIVE_GALVANIC_ISOLATED ? 1 : 0;
+  config.power_off_passive[0] = BOARD_PASSIVE_POWER_OFF_PASSIVE ? 1 : 0;
+  config.power_off_passive[1] = BOARD_PASSIVE_POWER_OFF_PASSIVE ? 1 : 0;
+  config.reset_safe[0] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
+  config.reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
+  config.txd_gated[0] = BOARD_PASSIVE_TXD_GATED ? 1 : 0;
+  config.txd_gated[1] = BOARD_PASSIVE_TXD_GATED ? 1 : 0;
+  config.normal_enable_path_populated[0] = BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED ? 1 : 0;
+  config.normal_enable_path_populated[1] = BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED ? 1 : 0;
+  config.field_sku_id = BOARD_PASSIVE_FIELD_SKU_ID;
+  config.external_analyzer_artifact_id = BOARD_PASSIVE_EXTERNAL_ANALYZER_ARTIFACT_ID;
+  config.hotplug_pass_count = BOARD_PASSIVE_HOTPLUG_PASS_COUNT;
+  config.host_session_epoch = host_session_epoch;
+  config.transport_epoch = transport_epoch;
+  config.usb_attach_quarantine_total = usb_attach_quarantine_total;
+  config.host_absent_gap_total = host_absent_gap_total;
+  config.pre_session_payload_replay_total = pre_session_payload_replay_total;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   config.capability_v2_flags |= (1u << 2);
 #endif
@@ -1224,7 +1297,7 @@ static void emit_capability() {
 #endif
 #endif
 
-  uint8_t payload[kCapabilityV5PayloadLen];
+  uint8_t payload[kCapabilityV6PayloadLen];
   const uint16_t payload_len = csm::board::build_capability_payload(config, payload, sizeof(payload));
   if (payload_len > 0) {
     emit_record(RecordType::Capability, payload, payload_len);
@@ -1328,6 +1401,23 @@ static bool can_queue_pop(CanRxItem& out) {
     return true;
   }
   return false;
+}
+
+static void discard_can_queue_for_session_quarantine() {
+  for (uint8_t index = 0; index < 2; ++index) {
+    volatile uint32_t& head_ref = can_q_head[index];
+    volatile uint32_t& tail_ref = can_q_tail[index];
+    const uint32_t head = head_ref;
+    const uint32_t tail = tail_ref;
+    const uint32_t pending = (head - tail) & kCanQueueMask;
+    if (pending == 0) {
+      continue;
+    }
+    tail_ref = head;
+    can_bus_runtime[index].queued = 0;
+    host_absent_rx_discard_total[index] += pending;
+  }
+  can_queue_pop_next_index = 0;
 }
 
 static uint8_t read_ab_state() {
@@ -1689,6 +1779,7 @@ static void close_host_absent_interval(uint32_t now_ms) {
   host_absent_duration_ms_total += duration_ms;
   host_absent_started_ms = 0;
   host_absent_summary_pending = true;
+  host_absent_gap_total++;
 }
 
 static void emit_host_absent_summary_if_needed() {
@@ -1724,6 +1815,7 @@ static void service_uplink_session_state() {
       uplink_session_was_open = false;
       usb_cdc_session_close_total++;
       usb_cdc_last_session_duration_ms = static_cast<uint32_t>(now_ms - usb_cdc_session_open_ms);
+      discard_session_uplink_payloads();
     }
     note_host_absent_active(now_ms);
     return;
@@ -1734,8 +1826,13 @@ static void service_uplink_session_state() {
 
   uplink_session_was_open = true;
   usb_cdc_session_open_total++;
+  host_session_epoch++;
+  transport_epoch++;
+  usb_attach_quarantine_total++;
   usb_cdc_session_open_ms = now_ms;
   close_host_absent_interval(now_ms);
+  discard_session_uplink_payloads();
+  can_rx_segment_builder.resetForEpoch(0);
 
   emit_capability();
   last_capability_ms = now_ms;

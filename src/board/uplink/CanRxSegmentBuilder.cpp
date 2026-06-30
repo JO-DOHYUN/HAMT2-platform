@@ -51,4 +51,14 @@ bool CanRxSegmentBuilder::flushIfDue(uint32_t now_us) {
   return flush();
 }
 
+void CanRxSegmentBuilder::discardPending() {
+  pending_count_ = 0;
+  first_pending_us_ = 0;
+}
+
+void CanRxSegmentBuilder::resetForEpoch(uint64_t next_segment_seq) {
+  discardPending();
+  segment_seq_next_ = next_segment_seq;
+}
+
 }  // namespace csm::board::uplink

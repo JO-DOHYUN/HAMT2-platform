@@ -94,6 +94,14 @@
 - Passive Product uses MCP2515 over SPI on `D7..D11` in listen-only mode for
   `bus=0` and Mid Carrier J4/U2 silent monitor RX for `bus=1`; it emits
   `CAN_RX_SEGMENT` for both buses and does not accept host CAN TX requests.
+- Passive Product host-absent mode is drain-and-discard. It must not stage typed
+  CAN payload for later replay, and session-open quarantine must clear only
+  CDC/uplink/session state while CAN front-end drain keeps running.
+- Capability v6 hardware evidence fields are claims/references. They support
+  mismatch and operator diagnostics but are not verified proof without external
+  analyzer/scope/DTC artifacts.
+- The product is two-bus only. Missing-bus diagnostics remain required to catch
+  wrong firmware upload or wiring/profile mismatch.
 - Full Instrumented additionally exposes the J4 CAN1 terminal as `bus=1`
   through the onboard U2 transceiver and accepts allowlisted host TX requests
   through the safety gate.

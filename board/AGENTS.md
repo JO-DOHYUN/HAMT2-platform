@@ -19,6 +19,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - Record schema, typed stream, mono64, drop/overflow contract: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 - Shared acceptance, capability binding, system-level contract: matching files under `shared/docs/`
 - Board firmware architecture or lane ownership: `board/docs/BOARD_ARCH_CURRENT_ADDENDUM_KO.md` first, then `board/docs/BOARD_ARCH_KO.md` for historical context
+- Passive Product host-absent/no-replay/quarantine/evidence boundary:
+  `board/docs/PASSIVE_PRODUCT_BOUNDARY_AUDIT.md`
 - Current verified CAN + voltage raw baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
 - Physical hardware concept, pinout, electrical interface, CAN/encoder carrier design: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md` and the specific hardware sub-doc needed
 - Mid Carrier dual CAN migration: `board/docs/HARDWARE_MID_TJA1051_DUAL_CAN_KO.md`
@@ -45,6 +47,15 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   silent monitor RX, disable USB reconnect reset, and advertise
   `vehicle_impact_state=configured_passive` unless hardware and bench safety
   evidence IDs allow `verified_passive`.
+- Passive Product must not stage CAN payload while host CDC/DTR is absent.
+  Session open must discard stale uplink/session payload, bump session epochs,
+  report host-absent summary, and then emit only new capture-session CAN frames.
+- USB attach quarantine is not a CAN front-end stop. It only cleans
+  CDC/uplink/session state while CAN RX passive drain continues.
+- Capability hardware evidence fields are claims/references. They must not be
+  used as physical proof without matching external analyzer/scope/DTC artifacts.
+- The current product is two-bus only. Keep missing/one-bus mismatch evidence;
+  do not reinterpret it as an accepted one-bus passive SKU.
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect

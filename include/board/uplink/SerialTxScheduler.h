@@ -62,6 +62,7 @@ class SerialTxScheduler {
   bool canEnqueue(uint32_t len, UplinkPriority priority) const;
   void noteAdmissionFailure(uint32_t len, UplinkPriority priority);
   bool enqueueAtomic(const uint8_t* data, uint32_t len, UplinkPriority priority);
+  void discardActiveFrame();
   SerialTxServiceResult service(uint32_t byte_budget, uint32_t now_ms, uint32_t now_us);
 
   const SerialTxCounters& counters() const { return counters_; }

@@ -77,6 +77,7 @@ class UplinkScheduler {
   bool hasQueuedRecords() const;
   bool hasQueueSpace(UplinkPriority priority) const;
   bool pressureActive() const;
+  void discardQueuedRecords();
   uint32_t queuedRecordCount() const;
   uint32_t queuedPayloadBytes() const { return queued_payload_bytes_; }
   uint32_t queuedPayloadHighWaterBytes() const {

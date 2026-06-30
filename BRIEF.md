@@ -57,6 +57,14 @@ This is the standalone CSM board firmware repository.
   host-absent counters and are not staged into typed segment/uplink payload
   pools. Session open immediately re-emits capability, USB CDC session evidence,
   host-absent summary when present, and board health.
+- USB attach quarantine is CDC/uplink/session cleanup only. It must never stop
+  CAN front-end passive drain or reset/reconfigure CAN controller/transceiver
+  state.
+- `CAPABILITY v6` hardware fields are runtime claims/artifact references only.
+  Final `verified_passive` requires external analyzer/scope/DTC evidence whose
+  IDs match the claim fields.
+- The product remains two-bus. One-bus passive products are invalid, but
+  one-bus/missing-bus mismatch diagnostics must remain visible to VSM.
 
 ## Canonical Contracts
 - Root routing: `AGENTS.md`

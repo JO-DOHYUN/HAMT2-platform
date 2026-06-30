@@ -123,6 +123,16 @@ bool UplinkScheduler::pressureActive() const {
          critical_queue_.count >= ((critical_queue_.capacity * 3U) / 4U);
 }
 
+void UplinkScheduler::discardQueuedRecords() {
+  if (serial_tx_ != nullptr) {
+    serial_tx_->discardActiveFrame();
+  }
+  active_descriptor_valid_ = false;
+  active_payload_ = {};
+  resetQueues();
+  resetPools();
+}
+
 uint32_t UplinkScheduler::queuedRecordCount() const {
   return static_cast<uint32_t>(critical_queue_.count) + can_truth_queue_.count +
          normal_queue_.count + diagnostic_queue_.count;
