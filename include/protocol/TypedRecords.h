@@ -54,6 +54,7 @@ static constexpr uint16_t kBoardHealthV2PayloadLen = 128;
 static constexpr uint16_t kBoardHealthV4PayloadLen = 192;
 static constexpr uint16_t kBoardHealthV5PayloadLen = 224;
 static constexpr uint16_t kBoardHealthV6PayloadLen = 260;
+static constexpr uint16_t kBoardHealthV7PayloadLen = 296;
 static constexpr uint16_t kCapabilityPayloadLen = 36;
 static constexpr uint16_t kCapabilityV1PayloadLen = 36;
 static constexpr uint16_t kCapabilityV2PayloadLen = 80;

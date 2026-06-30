@@ -252,6 +252,19 @@ Current `BOARD_EVENT` codes used by the reference firmware:
   because the board cannot transmit while the CDC session is closed. `detail`
   is the previous session duration in milliseconds, saturated at `0xFFFF`.
   `counter` is the session-close count since boot.
+- `29` USB CDC DTR changed. `detail` is 1 when asserted and 0 when deasserted.
+- `30` USB host absent CAN discard summary. Reported on the next session open.
+  `detail` is the host-absent duration in milliseconds saturated at `0xFFFF`;
+  `counter` is total frames explicitly discarded while the host was absent.
+- `31` MCP passive mode readback. `detail high byte` is CANCTRL and
+  `detail low byte` is TXREQ bitset for TXB0/TXB1/TXB2.
+- `32` MCP passive mode violation. Same detail format as `31`; this is
+  product-blocking passive evidence.
+- `33` MCP TXREQ violation. Same detail format as `31`; this is
+  product-blocking passive evidence.
+- `34` transceiver safe-state changed.
+- `35` USB power or reset suspected. This is product-blocking passive evidence
+  until hardware investigation clears it.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.
@@ -526,6 +539,18 @@ Extended 260-byte `BOARD_HEALTH v6` payload:
 - `248..251 usb_forced_reset_count u32`
 - `252..255 passive_violation_latch u32`
 - `256..259 capture_invalid_reason u32`
+
+Extended 296-byte `BOARD_HEALTH v7` payload:
+- `0..259`: same as the 260-byte v6 payload.
+- `260..263 host_absent_rx_discard_bus0_total u32`
+- `264..267 host_absent_rx_discard_bus1_total u32`
+- `268..271 host_absent_fifo_overflow_total u32`
+- `272..275 host_absent_mcp_error_total u32`
+- `276..279 host_absent_duration_ms_total u32`
+- `280..283 passive_readback_total u32`
+- `284..287 passive_readback_violation_total u32`
+- `288..291 txreq_violation_total u32`
+- `292..295 usb_cdc_dtr_change_total u32`
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - `bus_count` is build-profile driven. Passive Product currently exposes the

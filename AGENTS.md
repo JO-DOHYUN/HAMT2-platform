@@ -28,6 +28,14 @@ repositories, not inside this project folder.
 - CSM has two explicit artifacts: Passive Product for vehicle-impact-free
   evidence capture, and Full Instrumented for bench/HIL control work. Do not use
   Full Instrumented as passive acceptance evidence.
+- Passive Product has a separate two-bus RX candidate env only for field
+  diagnosis. It must still compile out host downlink, control, CAN TX, test TX,
+  USB reconnect reset, and MCP normal-mode transitions. It is not
+  `verified_passive` until hardware safety case and bench verification IDs are
+  nonzero.
+- CDC session open/close/DTR/re-enumeration must not change MCP mode, transceiver
+  mode, TX gate, or reset policy. Host absent service drains CAN front-end RX and
+  records discard summary counters; it must not stage typed frame payloads.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source
   of truth.
 - Do not create or maintain nested `qt/`, `vsm/`, `android/`, or duplicate
@@ -48,3 +56,5 @@ repositories, not inside this project folder.
   through `CAPABILITY`, and do not restore the failed MCP falling-edge INT gate.
 - If VSM behavior must change, do that in the standalone VSM repository and keep
   requested, host write, accepted, sent audit, and feedback as separate states.
+- If passive lifecycle evidence changes, update `include/protocol/TypedRecords.h`
+  and `shared/docs/TRANSPORT_AND_RECORDS_KO.md` in the same change.

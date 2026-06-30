@@ -12,6 +12,8 @@ This is the standalone CSM board firmware repository.
 ## Current Build Baseline
 - Board: Arduino Portenta H7 M7 + Mid Carrier ASX00055.
 - Product default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`.
+- Product candidate env for two-bus RX field diagnosis:
+  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive_2bus_rx`.
 - Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
 - Current board identity before this cleanup was read on COM7 as:
   - `git=4d21a3c9431`
@@ -39,12 +41,15 @@ This is the standalone CSM board firmware repository.
 - `CAPABILITY v5` exposes firmware profile, vehicle-impact state, host command
   RX, control path, USB reset sensitivity, CDC DTR session policy, and passive
   safety evidence IDs.
-- `BOARD_HEALTH v6` preserves earlier offsets and adds uplink pool/descriptor,
+- `BOARD_HEALTH v7` preserves earlier offsets and adds uplink pool/descriptor,
   CAN RX task max time, USB reconnect/reset counters, and passive violation
-  latch diagnostics.
-- Passive CDC uplink is session-gated: before host CDC/DTR session open, typed
-  evidence is not staged into the uplink payload pool; session open immediately
-  re-emits capability, USB CDC session evidence, and board health.
+  latch diagnostics plus host-absent discard, MCP passive readback, TXREQ
+  violation, and DTR change counters.
+- Passive CDC uplink is session-gated: before host CDC/DTR session open, CAN
+  front-end service continues, but received frames are discarded by explicit
+  host-absent counters and are not staged into typed segment/uplink payload
+  pools. Session open immediately re-emits capability, USB CDC session evidence,
+  host-absent summary when present, and board health.
 
 ## Canonical Contracts
 - Root routing: `AGENTS.md`
@@ -57,6 +62,12 @@ Build Passive Product firmware:
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
+```
+
+Build Passive Product two-bus RX candidate firmware:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive_2bus_rx
 ```
 
 Build Full Instrumented firmware:

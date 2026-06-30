@@ -403,6 +403,8 @@ static constexpr uint32_t kPassiveViolationCanTxCalled = (1u << 1);
 static constexpr uint32_t kPassiveViolationMcpNormalMode = (1u << 2);
 static constexpr uint32_t kPassiveViolationUsbResetAttempted = (1u << 3);
 static constexpr uint32_t kPassiveViolationTransceiverSafeMissing = (1u << 4);
+static constexpr uint32_t kPassiveViolationMcpReadbackMode = (1u << 5);
+static constexpr uint32_t kPassiveViolationMcpTxreqSet = (1u << 6);
 
 #if BOARD_ENABLE_MCP2515
 static constexpr CAN_SPEED kMcp2515Bitrate = CAN_500KBPS;
@@ -430,6 +432,7 @@ using csm::kCapabilityV5PayloadLen;
 using csm::kBoardHealthV2PayloadLen;
 using csm::kBoardHealthV4PayloadLen;
 using csm::kBoardHealthV6PayloadLen;
+using csm::kBoardHealthV7PayloadLen;
 using csm::kCanRxSegmentEntryLen;
 using csm::kCanRxSegmentHeaderLen;
 using csm::kCanRxSegmentMaxFrames;
@@ -479,6 +482,13 @@ enum BoardEventCode : uint16_t {
   EventCanRxSegmentEnqueueFailed = 26,
   EventUsbCdcSessionOpen = 27,
   EventUsbCdcSessionClose = 28,
+  EventUsbCdcDtrChange = 29,
+  EventUsbHostAbsentCanDiscardSummary = 30,
+  EventMcpPassiveModeReadback = 31,
+  EventMcpPassiveModeViolation = 32,
+  EventMcpTxreqViolation = 33,
+  EventTransceiverSafeStateChanged = 34,
+  EventUsbPowerOrResetSuspected = 35,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -665,12 +675,26 @@ static uint32_t usb_cdc_session_close_total = 0;
 static uint32_t usb_cdc_session_close_reported_total = 0;
 static uint32_t usb_cdc_session_open_ms = 0;
 static uint32_t usb_cdc_last_session_duration_ms = 0;
+static uint32_t usb_cdc_dtr_change_total = 0;
+static bool usb_cdc_last_dtr = false;
+static bool usb_cdc_dtr_initialized = false;
 static uint32_t usb_reconnect_count = 0;
 static uint32_t usb_forced_reset_count = 0;
 static uint32_t passive_violation_latch = 0;
 static uint32_t can_rx_task_max_us = 0;
 static uint32_t uplink_pool_high_water_bytes = 0;
 static uint32_t capture_invalid_reason = 0;
+static uint32_t host_absent_rx_discard_total[2] = {0, 0};
+static uint32_t host_absent_fifo_overflow_total = 0;
+static uint32_t host_absent_mcp_error_total = 0;
+static uint32_t host_absent_duration_ms_total = 0;
+static uint32_t host_absent_started_ms = 0;
+static uint32_t host_absent_last_duration_ms = 0;
+static bool host_absent_summary_pending = false;
+static uint32_t passive_readback_total = 0;
+static uint32_t passive_readback_violation_total = 0;
+static uint32_t txreq_violation_total = 0;
+static uint32_t last_passive_readback_ms = 0;
 
 static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -745,6 +769,14 @@ static void service_deferred_loss_events();
 static bool uplink_host_session_open() {
 #if defined(SERIAL_CDC)
   return _SerialUSB.connected();
+#else
+  return true;
+#endif
+}
+
+static bool usb_cdc_dtr_asserted() {
+#if defined(SERIAL_CDC)
+  return _SerialUSB.dtr();
 #else
   return true;
 #endif
@@ -1504,7 +1536,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
-  uint8_t payload[kBoardHealthV6PayloadLen];
+  uint8_t payload[kBoardHealthV7PayloadLen];
   memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
   wr_u32_le(&payload[8], can_rx_count_total);
@@ -1536,7 +1568,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
                      : 0;
   payload[47] |= uplink_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
-  payload[52] = 6;  // BOARD_HEALTH payload version.
+  payload[52] = 7;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
   payload[54] = static_cast<uint8_t>(safety_supervisor.state());
   payload[55] = safety_supervisor.faultBits();
@@ -1618,11 +1650,62 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[248], usb_forced_reset_count);
   wr_u32_le(&payload[252], passive_violation_latch);
   wr_u32_le(&payload[256], capture_invalid_reason);
+  wr_u32_le(&payload[260], host_absent_rx_discard_total[0]);
+  wr_u32_le(&payload[264], host_absent_rx_discard_total[1]);
+  wr_u32_le(&payload[268], host_absent_fifo_overflow_total);
+  wr_u32_le(&payload[272], host_absent_mcp_error_total);
+  wr_u32_le(&payload[276], host_absent_duration_ms_total);
+  wr_u32_le(&payload[280], passive_readback_total);
+  wr_u32_le(&payload[284], passive_readback_violation_total);
+  wr_u32_le(&payload[288], txreq_violation_total);
+  wr_u32_le(&payload[292], usb_cdc_dtr_change_total);
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
+}
+
+static void note_host_absent_active(uint32_t now_ms) {
+  if (host_absent_started_ms == 0) {
+    host_absent_started_ms = now_ms == 0 ? 1 : now_ms;
+  }
+}
+
+static void close_host_absent_interval(uint32_t now_ms) {
+  if (host_absent_started_ms == 0) {
+    return;
+  }
+  const uint32_t duration_ms = static_cast<uint32_t>(now_ms - host_absent_started_ms);
+  host_absent_last_duration_ms = duration_ms;
+  host_absent_duration_ms_total += duration_ms;
+  host_absent_started_ms = 0;
+  host_absent_summary_pending = true;
+}
+
+static void emit_host_absent_summary_if_needed() {
+  if (!host_absent_summary_pending) {
+    return;
+  }
+  host_absent_summary_pending = false;
+  const uint16_t detail =
+      static_cast<uint16_t>((host_absent_last_duration_ms > 0xFFFFu)
+                                ? 0xFFFFu
+                                : host_absent_last_duration_ms);
+  const uint32_t discarded = host_absent_rx_discard_total[0] + host_absent_rx_discard_total[1];
+  emit_board_event(EventUsbHostAbsentCanDiscardSummary, detail, discarded);
 }
 
 static void service_uplink_session_state() {
   const uint32_t now_ms = millis();
+  const bool dtr = usb_cdc_dtr_asserted();
+  if (!usb_cdc_dtr_initialized) {
+    usb_cdc_dtr_initialized = true;
+    usb_cdc_last_dtr = dtr;
+  } else if (usb_cdc_last_dtr != dtr) {
+    usb_cdc_last_dtr = dtr;
+    usb_cdc_dtr_change_total++;
+    if (uplink_host_session_open()) {
+      emit_board_event(EventUsbCdcDtrChange, dtr ? 1 : 0, usb_cdc_dtr_change_total);
+    }
+  }
+
   const bool open = uplink_host_session_open();
   if (!open) {
     if (uplink_session_was_open) {
@@ -1630,6 +1713,7 @@ static void service_uplink_session_state() {
       usb_cdc_session_close_total++;
       usb_cdc_last_session_duration_ms = static_cast<uint32_t>(now_ms - usb_cdc_session_open_ms);
     }
+    note_host_absent_active(now_ms);
     return;
   }
   if (uplink_session_was_open) {
@@ -1639,6 +1723,7 @@ static void service_uplink_session_state() {
   uplink_session_was_open = true;
   usb_cdc_session_open_total++;
   usb_cdc_session_open_ms = now_ms;
+  close_host_absent_interval(now_ms);
 
   emit_capability();
   last_capability_ms = now_ms;
@@ -1654,6 +1739,7 @@ static void service_uplink_session_state() {
     emit_board_event(EventUsbCdcSessionClose, duration_detail, usb_cdc_session_close_total);
     usb_cdc_session_close_reported_total = usb_cdc_session_close_total;
   }
+  emit_host_absent_summary_if_needed();
 
   const EncoderSnapshot snap = poll_encoder();
   emit_board_health(snap);
@@ -1832,6 +1918,8 @@ static constexpr uint8_t kMcpRegCanctrl = 0x0F;
 static constexpr uint8_t kMcpRegCanintf = 0x2C;
 static constexpr uint8_t kMcpRegEflg = 0x2D;
 static constexpr uint8_t kMcpRegTxb0ctrl = 0x30;
+static constexpr uint8_t kMcpRegTxb1ctrl = 0x40;
+static constexpr uint8_t kMcpRegTxb2ctrl = 0x50;
 static constexpr uint8_t kMcpInstrRead = 0x03;
 static constexpr uint8_t kMcpInstrBitModify = 0x05;
 static constexpr uint8_t kMcpCanctrlAbat = 0x10;
@@ -1960,6 +2048,53 @@ static void __attribute__((unused)) service_mcp2515_status_after_drain(bool forc
 #endif
 }
 
+static void __attribute__((unused)) service_mcp2515_passive_readback_guard(bool force_event = false) {
+#if BOARD_ENABLE_MCP2515
+  if (!BOARD_CSM_PROFILE_PASSIVE_PRODUCT || mcp2515 == nullptr) {
+    return;
+  }
+  const uint32_t now_ms = millis();
+  if (!force_event && static_cast<uint32_t>(now_ms - last_passive_readback_ms) < 250) {
+    return;
+  }
+  last_passive_readback_ms = now_ms;
+
+  const uint8_t canctrl = mcp2515_raw_read_register(kMcpRegCanctrl);
+  const uint8_t txb0 = mcp2515_raw_read_register(kMcpRegTxb0ctrl);
+  const uint8_t txb1 = mcp2515_raw_read_register(kMcpRegTxb1ctrl);
+  const uint8_t txb2 = mcp2515_raw_read_register(kMcpRegTxb2ctrl);
+  const uint8_t txreq = ((txb0 & kMcpTxbTxreq) ? 1u : 0u) |
+                        ((txb1 & kMcpTxbTxreq) ? 2u : 0u) |
+                        ((txb2 & kMcpTxbTxreq) ? 4u : 0u);
+  passive_readback_total++;
+
+  if (canctrl == 0xFFu) {
+    host_absent_mcp_error_total++;
+    mcp_service.spi_error_total++;
+    emit_board_event(EventMcpPassiveModeReadback, 0xFFu, passive_readback_total);
+    return;
+  }
+
+  const bool listen_only = (canctrl & 0xE0u) == 0x60u;
+  const uint16_t detail = (static_cast<uint16_t>(canctrl) << 8) | txreq;
+  if (!listen_only) {
+    passive_readback_violation_total++;
+    latch_passive_violation(kPassiveViolationMcpReadbackMode);
+    emit_board_event(EventMcpPassiveModeViolation, detail, passive_readback_violation_total);
+  } else if (force_event) {
+    emit_board_event(EventMcpPassiveModeReadback, detail, passive_readback_total);
+  }
+
+  if (txreq != 0) {
+    txreq_violation_total++;
+    latch_passive_violation(kPassiveViolationMcpTxreqSet);
+    emit_board_event(EventMcpTxreqViolation, detail, txreq_violation_total);
+  }
+#else
+  (void)force_event;
+#endif
+}
+
 static bool __attribute__((unused)) should_service_mcp2515_rx() {
 #if BOARD_ENABLE_MCP2515
   if (BOARD_CAN_IRQ_MODE == 0) {
@@ -1992,6 +2127,48 @@ static bool __attribute__((unused)) should_service_mcp2515_rx() {
   return false;
 #else
   return false;
+#endif
+}
+
+static void __attribute__((unused)) service_mcp2515_host_absent_drain(int budget) {
+#if BOARD_ENABLE_MCP2515
+  if (mcp2515 == nullptr || !should_service_mcp2515_rx()) {
+    return;
+  }
+
+  bool saw_error = false;
+  const uint32_t overflow_before = can_fifo_overflow_total;
+  const uint32_t start_us = micros();
+  while (budget-- > 0) {
+    if (static_cast<uint32_t>(micros() - start_us) > BOARD_MCP2515_RX_DRAIN_TIME_BUDGET_US) {
+      mcp_service.drain_time_budget_hit_total++;
+      break;
+    }
+    struct can_frame msg;
+    const MCP2515::ERROR err = mcp2515->readMessage(&msg);
+    if (err == MCP2515::ERROR_NOMSG) {
+      if ((BOARD_CAN_IRQ_MODE != 0) && !digitalRead(BoardPins::CanIntN)) {
+        mcp_service.nomsg_while_int_low++;
+      }
+      break;
+    }
+    if (err != MCP2515::ERROR_OK) {
+      mcp_service.spi_error_total++;
+      host_absent_mcp_error_total++;
+      saw_error = true;
+      break;
+    }
+    host_absent_rx_discard_total[BOARD_MCP2515_BUS_ID & 0x01u]++;
+  }
+  note_can_rx_task_elapsed(start_us);
+  service_mcp2515_status_after_drain(saw_error);
+  const uint32_t overflow_delta = can_fifo_overflow_total - overflow_before;
+  if (overflow_delta > 0) {
+    host_absent_fifo_overflow_total += overflow_delta;
+  }
+  service_mcp2515_passive_readback_guard(false);
+#else
+  (void)budget;
 #endif
 }
 
@@ -2064,6 +2241,7 @@ static bool init_can_backend() {
   mcp2515_irq_pending = mcp_service.last_int_low;
 #endif
   emit_spi_snapshot(5);
+  service_mcp2515_passive_readback_guard(true);
   return true;
 #else
   return false;
@@ -2131,6 +2309,7 @@ static void pump_can_rx_to_queue(int budget) {
   }
   note_can_rx_task_elapsed(start_us);
   service_mcp2515_status_after_drain(saw_error);
+  service_mcp2515_passive_readback_guard(false);
 #else
   (void)budget;
 #endif
@@ -2187,6 +2366,20 @@ static void service_builtin_can_rx_to_queue(int budget) {
     }
 
     can_queue_push(item);
+  }
+#else
+  (void)budget;
+#endif
+}
+
+static void __attribute__((unused)) service_builtin_can_rx_host_absent_drain(int budget) {
+#if BOARD_ENABLE_BUILTIN_CAN_RX
+  if (!builtin_can_tx_ok) {
+    return;
+  }
+  while (budget-- > 0 && CAN.available() > 0) {
+    (void)CAN.read();
+    host_absent_rx_discard_total[BOARD_BUILTIN_CAN_BUS_ID & 0x01u]++;
   }
 #else
   (void)budget;
@@ -2971,6 +3164,29 @@ void loop() {
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
   service_uplink_session_state();
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  if (!uplink_host_session_open()) {
+    if (!kTestMode && can_backend_ok) {
+      service_mcp2515_host_absent_drain(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
+    } else if (BOARD_ENABLE_MCP2515_INIT &&
+               (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
+      last_can_init_retry_ms = millis();
+      can_backend_ok = init_can_backend();
+      if (!can_backend_ok) {
+        note_can_init_retry_failure();
+      } else {
+        reset_can_init_retry_backoff();
+      }
+    }
+    service_builtin_can_rx_host_absent_drain(128);
+    update_safety_state();
+    toggle_safety_watchdog_if_needed();
+    service_status_led();
+    last_health_ms = millis();
+    kick_runtime_watchdog();
+    return;
+  }
+#endif
   if (!kTestMode && can_backend_ok) {
     pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
   }
