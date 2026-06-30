@@ -248,6 +248,10 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `27` USB CDC session opened. `detail` bit0 means CDC DTR session is required,
   bit1 means DTR is session-only/passive-safe. `counter` is the session-open
   count since boot.
+- `28` USB CDC session closed. The close is reported on the next session open
+  because the board cannot transmit while the CDC session is closed. `detail`
+  is the previous session duration in milliseconds, saturated at `0xFFFF`.
+  `counter` is the session-close count since boot.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.

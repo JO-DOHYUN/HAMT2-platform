@@ -478,6 +478,7 @@ enum BoardEventCode : uint16_t {
   EventSerialTxRingClear = 25,
   EventCanRxSegmentEnqueueFailed = 26,
   EventUsbCdcSessionOpen = 27,
+  EventUsbCdcSessionClose = 28,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -660,6 +661,10 @@ static bool usb_host_was_connected = false;
 static bool uplink_session_was_open = false;
 static uint32_t usb_disconnected_since_ms = 0;
 static uint32_t usb_cdc_session_open_total = 0;
+static uint32_t usb_cdc_session_close_total = 0;
+static uint32_t usb_cdc_session_close_reported_total = 0;
+static uint32_t usb_cdc_session_open_ms = 0;
+static uint32_t usb_cdc_last_session_duration_ms = 0;
 static uint32_t usb_reconnect_count = 0;
 static uint32_t usb_forced_reset_count = 0;
 static uint32_t passive_violation_latch = 0;
@@ -1617,9 +1622,14 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 }
 
 static void service_uplink_session_state() {
+  const uint32_t now_ms = millis();
   const bool open = uplink_host_session_open();
   if (!open) {
-    uplink_session_was_open = false;
+    if (uplink_session_was_open) {
+      uplink_session_was_open = false;
+      usb_cdc_session_close_total++;
+      usb_cdc_last_session_duration_ms = static_cast<uint32_t>(now_ms - usb_cdc_session_open_ms);
+    }
     return;
   }
   if (uplink_session_was_open) {
@@ -1628,17 +1638,26 @@ static void service_uplink_session_state() {
 
   uplink_session_was_open = true;
   usb_cdc_session_open_total++;
+  usb_cdc_session_open_ms = now_ms;
 
   emit_capability();
-  last_capability_ms = millis();
+  last_capability_ms = now_ms;
 
   uint16_t detail = BOARD_USB_CDC_DTR_SESSION_REQUIRED ? 0x0001u : 0x0000u;
   detail |= BOARD_USB_CDC_DTR_SESSION_ONLY ? 0x0002u : 0x0000u;
   emit_board_event(EventUsbCdcSessionOpen, detail, usb_cdc_session_open_total);
+  if (usb_cdc_session_close_reported_total != usb_cdc_session_close_total) {
+    const uint16_t duration_detail =
+        static_cast<uint16_t>(usb_cdc_last_session_duration_ms > 0xFFFFu
+                                  ? 0xFFFFu
+                                  : usb_cdc_last_session_duration_ms);
+    emit_board_event(EventUsbCdcSessionClose, duration_detail, usb_cdc_session_close_total);
+    usb_cdc_session_close_reported_total = usb_cdc_session_close_total;
+  }
 
   const EncoderSnapshot snap = poll_encoder();
   emit_board_health(snap);
-  last_health_ms = millis();
+  last_health_ms = now_ms;
 }
 
 static bool init_voltage_adc_lane() {
