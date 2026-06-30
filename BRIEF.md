@@ -12,8 +12,11 @@ This is the standalone CSM board firmware repository.
 ## Current Build Baseline
 - Board: Arduino Portenta H7 M7 + Mid Carrier ASX00055.
 - Product default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`.
-- Product candidate env for two-bus RX field diagnosis:
-  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive_2bus_rx`.
+  This is the two-bus RX passive product artifact for the current vehicle use
+  case.
+- Compatibility alias env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive_2bus_rx`.
+  It must build the same two-bus passive behavior; any passive artifact with
+  fewer than two RX buses is invalid for the current vehicle product.
 - Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
 - Current board identity before this cleanup was read on COM7 as:
   - `git=4d21a3c9431`
@@ -27,9 +30,13 @@ This is the standalone CSM board firmware repository.
 
 ## CSM Baseline
 - Passive Product `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic
-  CAN 2.0 500 kbps, MCP listen-only. Host downlink/control/TX/test paths are
-  compile-time removed. Encoder-derived streaming is also disabled in the
-  product passive env; keep non-CAN instrumentation in Full/diagnostic envs.
+  CAN 2.0 500 kbps, MCP listen-only.
+- Passive Product `bus=1`: Mid Carrier J4/U2 built-in CAN, Classic CAN 2.0
+  500 kbps, mbed CAN silent monitor mode. It must advertise listen-only /
+  ACK-incapable capability in passive builds.
+- Host downlink/control/TX/test paths are compile-time removed in the product
+  passive env. Encoder-derived streaming is also disabled in the product passive
+  env; keep non-CAN instrumentation in Full/diagnostic envs.
 - Full Instrumented keeps `bus=0` MCP2515/TJA1050 and `bus=1` Mid Carrier J4
   CAN1 through onboard U2 for bench/HIL audited control tests.
 - Live production output is typed transport v1.
@@ -64,7 +71,7 @@ Build Passive Product firmware:
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
 ```
 
-Build Passive Product two-bus RX candidate firmware:
+Build Passive Product two-bus RX compatibility alias firmware:
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive_2bus_rx

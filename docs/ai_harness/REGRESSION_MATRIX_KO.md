@@ -9,6 +9,8 @@
   `dtr_session_only=1`, `passive_acceptance=0` unless hardware evidence IDs are
   explicitly configured
 - MCP2515 starts listen-only and bus0 advertises no ACK/error-frame capability
+- Mid Carrier J4/U2 bus1 starts in mbed CAN silent monitor mode and advertises
+  no ACK/error-frame capability
 - `BOARD_HEALTH v6 passive_violation=0`, `serial_clear=0`,
   `serial_enqueue_fail=0`, `uplink_pool_alloc_fail=0` during smoke after the
   USB CDC host session opens
@@ -29,9 +31,11 @@
 - built-in CAN RX -> `CAN_RX_RAW bus=1`
 - MCP INT level hint + bounded polling, no falling-edge-only gate
 
-## CSM Regression - mid_mcp2515_csm_single_lane
-- single-lane env `portenta_h7_m7_mid_mcp2515_csm` exposes one bus descriptor
-  for `bus=0`
+## CSM Regression - mid_mcp2515_csm_legacy_mcp_only
+- legacy/bench-only MCP regression; not a Passive Product artifact and not a
+  current vehicle acceptance target
+- env `portenta_h7_m7_mid_mcp2515_csm` exposes only the MCP descriptor for
+  `bus=0`
 - MCP RX -> `CAN_RX_RAW bus=0`
 - host type 10 on `bus=0` accepted IDs -> `CONTROL_ACK` then `CAN_TX_RAW bus=0`
 - PCAN sees the audited board TX frame

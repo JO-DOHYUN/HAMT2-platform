@@ -553,12 +553,13 @@ Extended 296-byte `BOARD_HEALTH v7` payload:
 - `292..295 usb_cdc_dtr_change_total u32`
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
-- `bus_count` is build-profile driven. Passive Product currently exposes the
-  listen-only MCP2515 lane as `bus_count=1`. Full Instrumented dual CSM exposes
-  both MCP2515/TJA1050 and Mid Carrier J4/U2 as `bus_count=2`.
+- Passive Product and Full Instrumented both expose `bus_count=2` for the
+  current vehicle product. One-bus passive builds are not product artifacts.
 - descriptor 0 describes `bus=0` MCP2515/TJA1050.
-- descriptor 1, when present, describes `bus=1` Mid Carrier J4/U2 through the
-  Arduino CAN single-object backend.
+- descriptor 1 describes `bus=1` Mid Carrier J4/U2 through the mbed CAN backend.
+  Passive Product must advertise this lane as listen-only / ACK-incapable after
+  enabling silent monitor mode. Full Instrumented may advertise normal/ACK/TX
+  capability for bench/HIL only.
 - role is build-profile driven. The default `portenta_h7_m7_mid_mcp2515_csm`
   uses role `2` drive/control, while
   `portenta_h7_m7_mid_mcp2515_csm_system` uses role `1` monitor/system on the
@@ -567,9 +568,9 @@ Mid Carrier MCP2515 profile major `3` descriptor default:
 - physical backend `1` MCP2515, transceiver `1` TJA1050.
 - `rx_supported=1`, `tx_supported=1`, `control_tx_allowed=1` when
   a Full Instrumented active-capable env is built. Passive Product must report
-  `tx_supported=0`, `control_tx_allowed=0`, downlink mask `0`, MCP listen-only
-  bus mode, and `passive_acceptance_allowed=0` until hardware and bench safety
-  evidence are supplied.
+  `tx_supported=0`, `control_tx_allowed=0`, downlink mask `0`, listen-only bus
+  mode, ACK capability `0`, and `passive_acceptance_allowed=0` until hardware
+  and bench safety evidence are supplied.
 - Classic CAN supported, CAN FD unsupported, max live DLC `8`, nominal bitrate
   `500000`, data bitrate `0`.
 

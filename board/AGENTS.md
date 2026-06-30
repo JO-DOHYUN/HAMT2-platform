@@ -41,9 +41,10 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   audited TX as `bus=0`, and Mid Carrier J4/U2 RX and audited TX as `bus=1`
   only in Full Instrumented bench/HIL builds
 - Passive Product must compile out host downlink/control/CAN TX/test paths,
-  keep MCP2515 listen-only, disable USB reconnect reset, and advertise
+  keep MCP2515 listen-only, force the Mid Carrier J4/U2 built-in CAN lane into
+  silent monitor RX, disable USB reconnect reset, and advertise
   `vehicle_impact_state=configured_passive` unless hardware and bench safety
-  evidence IDs allow `verified_passive`
+  evidence IDs allow `verified_passive`.
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect
@@ -69,7 +70,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   record helpers, host parsing, lane IO, control, safety, health, and capability
   logic should move into scoped modules without changing the typed wire contract.
 - MCP2515 remains the current working external controller path; J4/U2 uses the
-  single Arduino CAN object as the second HIL-proven physical channel.
+  mbed CAN driver directly as the second physical RX channel so passive builds
+  can request silent monitor mode.
 - `CONTROL_ACK` means rejected or accepted by the board control path. Actual CAN
   write success remains `CAN_TX_RAW`.
 

@@ -28,11 +28,10 @@ repositories, not inside this project folder.
 - CSM has two explicit artifacts: Passive Product for vehicle-impact-free
   evidence capture, and Full Instrumented for bench/HIL control work. Do not use
   Full Instrumented as passive acceptance evidence.
-- Passive Product has a separate two-bus RX candidate env only for field
-  diagnosis. It must still compile out host downlink, control, CAN TX, test TX,
-  USB reconnect reset, and MCP normal-mode transitions. It is not
-  `verified_passive` until hardware safety case and bench verification IDs are
-  nonzero.
+- Passive Product is always a two-bus RX artifact for the current vehicle use
+  case. It must compile out host downlink, control, CAN TX, test TX, USB
+  reconnect reset, and MCP normal-mode transitions. It is not `verified_passive`
+  until hardware safety case and bench verification IDs are nonzero.
 - CDC session open/close/DTR/re-enumeration must not change MCP mode, transceiver
   mode, TX gate, or reset policy. Host absent service drains CAN front-end RX and
   records discard summary counters; it must not stage typed frame payloads.
@@ -42,12 +41,10 @@ repositories, not inside this project folder.
   `csm/` project workspaces under this CSM repository. Build and upload CSM only
   from this repository root with PlatformIO.
 - Bus labels are profile/capability-driven. The Passive Product default env is
-  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`, which exposes the external
-  MCP2515/TJA1050 lane as listen-only `bus=0`. The Full Instrumented env keeps
-  MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1` for bench/HIL RX and
-  audited control TX. The earlier dual-internal CAN0/CAN1 + TJA1051 target is
-  deferred because this ArduinoCore Portenta profile exposes only one practical
-  CAN object.
+  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`, which exposes MCP2515/TJA1050
+  as listen-only `bus=0` and Mid Carrier J4/U2 as silent-monitor RX `bus=1`.
+  The Full Instrumented env keeps both buses available for bench/HIL RX and
+  audited control TX. One-bus passive builds are not product artifacts.
 
 ## Change Rules
 - If record wire format changes, update `shared/docs/TRANSPORT_AND_RECORDS_KO.md`

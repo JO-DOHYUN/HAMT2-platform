@@ -7,13 +7,13 @@
 - final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
 - current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
 - current Passive Product CSM CAN: Portenta H7 M7 + Mid Carrier ASX00055 +
-  MCP2515/TJA1050 SPI
-  module, `MCP_8MHZ`, `CAN_500KBPS`, 8 MHz SPI, polling drain
+  MCP2515/TJA1050 SPI module and Mid Carrier J4/U2 built-in CAN RX. `bus=0`
+  is MCP2515/TJA1050 at `MCP_8MHZ`, `CAN_500KBPS`, 8 MHz SPI, polling drain
   (`BOARD_CAN_IRQ_MODE=0`), `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`,
-  `CS/SCK/SI/SO/INT` level shifted. `bus=0` is the typed RX evidence lane and
-  MCP2515 is configured listen-only in the passive env. Host downlink, control
-  TX, CAN TX tests, USB disconnect reset, and MCP normal-mode transition are
-  compile-time forbidden for the passive artifact.
+  `CS/SCK/SI/SO/INT` level shifted, and MCP listen-only. `bus=1` is J4/U2
+  built-in CAN at 500 kbps through mbed CAN silent monitor mode. Host downlink,
+  control TX, CAN TX tests, USB disconnect reset, and MCP normal-mode transition
+  are compile-time forbidden for the passive artifact.
 - Full Instrumented keeps the active-capable dual CSM path for bench/HIL only:
   MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1`, host control, safety
   gate, and audited `CAN_TX_RAW`.
@@ -91,8 +91,9 @@
   success evidence
 - drive encoder input is fixed as industrial HTL front-end plus Portenta `PC6`/`PC7` TIM3 encoder mode and `PA8` index input; direct 24 V HTL to GPIO is forbidden
 - carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
-- Passive Product uses MCP2515 over SPI on `D7..D11` in listen-only mode and
-  emits `CAN_RX_SEGMENT bus=0`; it does not accept host CAN TX requests.
+- Passive Product uses MCP2515 over SPI on `D7..D11` in listen-only mode for
+  `bus=0` and Mid Carrier J4/U2 silent monitor RX for `bus=1`; it emits
+  `CAN_RX_SEGMENT` for both buses and does not accept host CAN TX requests.
 - Full Instrumented additionally exposes the J4 CAN1 terminal as `bus=1`
   through the onboard U2 transceiver and accepts allowlisted host TX requests
   through the safety gate.

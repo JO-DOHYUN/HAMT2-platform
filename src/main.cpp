@@ -371,10 +371,13 @@
 #if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
 #error "Passive Product must disable USB CDC reconnect reset"
 #endif
+#if !BOARD_ENABLE_BUILTIN_CAN_RX
+#error "Passive Product must expose both vehicle CAN buses; fewer than two RX buses is invalid"
+#endif
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-#include <Arduino_CAN.h>
+#include "drivers/CAN.h"
 #endif
 
 #if BOARD_ENABLE_MCP2515
@@ -604,6 +607,7 @@ static Mcp2515ServiceState mcp_service = {};
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
+static mbed::CAN builtin_can(PIN_CAN0_RX, PIN_CAN0_TX);
 static bool builtin_can_tx_ok = false;
 #endif
 
@@ -1162,9 +1166,17 @@ static void emit_capability() {
       BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
       0,
       0);
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  // Passive 2-bus product uses mbed CAN silent monitor mode on the Mid Carrier
+  // J4/U2 lane. Advertising normal/ACK-capable here would hide vehicle-impact risk.
+  config.bus_mode[1] = kBusModeListenOnly;
+  config.bus_ack_capability[1] = 0;
+  config.bus_error_frame_capability[1] = 0;
+#else
   config.bus_mode[1] = kBusModeNormal;
   config.bus_ack_capability[1] = 1;
   config.bus_error_frame_capability[1] = 1;
+#endif
   config.bus_transceiver_reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #endif
 #else
@@ -2317,10 +2329,15 @@ static void pump_can_rx_to_queue(int budget) {
 
 static bool __attribute__((unused)) init_builtin_can_lane() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-  if (!CAN.begin(CanBitRate::BR_500k)) {
+  if (builtin_can.frequency(500000) != 1) {
     emit_board_event(EventBuiltinCanBeginFailed, 0, 1);
     return false;
   }
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  builtin_can.monitor(true);
+#else
+  builtin_can.monitor(false);
+#endif
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
   builtin_can_tx_total = 0;
   builtin_can_tx_failed_total = 0;
@@ -2340,23 +2357,26 @@ static void service_builtin_can_rx_to_queue(int budget) {
     return;
   }
 
-  while (budget-- > 0 && CAN.available() > 0) {
-    const CanMsg msg = CAN.read();
+  mbed::CANMessage msg;
+  while (budget-- > 0 && builtin_can.read(msg) > 0) {
+    if (msg.type != CANData) {
+      continue;
+    }
 
     CanRxItem item;
     item.capture_seq = can_capture_seq_next++;
     item.mono_us = mono64_us();
 
-    uint32_t can_id_flags = msg.isExtendedId() ? msg.getExtendedId() : msg.getStandardId();
+    uint32_t can_id_flags = msg.id;
     can_id_flags &= 0x1FFFFFFF;
-    if (msg.isExtendedId()) {
+    if (msg.format == CANExtended) {
       can_id_flags |= (1u << 29);
     }
     item.can_id_flags = can_id_flags;
 
-    uint8_t dlc = msg.data_length;
-    if (dlc > CanMsg::MAX_DATA_LENGTH) {
-      dlc = CanMsg::MAX_DATA_LENGTH;
+    uint8_t dlc = msg.len;
+    if (dlc > 8) {
+      dlc = 8;
     }
     item.dlc_flags = dlc & 0x0F;
     item.bus = BOARD_BUILTIN_CAN_BUS_ID;
@@ -2377,8 +2397,8 @@ static void __attribute__((unused)) service_builtin_can_rx_host_absent_drain(int
   if (!builtin_can_tx_ok) {
     return;
   }
-  while (budget-- > 0 && CAN.available() > 0) {
-    (void)CAN.read();
+  mbed::CANMessage msg;
+  while (budget-- > 0 && builtin_can.read(msg) > 0) {
     host_absent_rx_discard_total[BOARD_BUILTIN_CAN_BUS_ID & 0x01u]++;
   }
 #else
@@ -2721,10 +2741,9 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
-  const uint32_t arduino_id = extended ? arduino::CanExtendedId(can_id) : arduino::CanStandardId(can_id);
-  CanMsg msg(arduino_id, dlc, data);
+  const mbed::CANMessage msg(can_id, data, dlc, CANData, extended ? CANExtended : CANStandard);
   latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = CAN.write(msg);
+  const int rc = builtin_can.write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
     host_can_tx_rejected_total++;
@@ -2949,9 +2968,9 @@ static void service_builtin_can_tx_test() {
     0x07,
   };
 
-  CanMsg msg(arduino::CanStandardId(BOARD_BUILTIN_CAN_TX_TEST_ID), sizeof(data), data);
+  const mbed::CANMessage msg(BOARD_BUILTIN_CAN_TX_TEST_ID, data, sizeof(data), CANData, CANStandard);
   latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = CAN.write(msg);
+  const int rc = builtin_can.write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
     if ((builtin_can_tx_failed_total & 0x0F) == 1) {
