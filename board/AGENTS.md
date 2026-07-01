@@ -43,21 +43,22 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   audited TX as `bus=0`, and Mid Carrier J4/U2 RX and audited TX as `bus=1`
   only in Full Instrumented bench/HIL builds
 - Passive Product must compile out host downlink/control/CAN TX/test paths,
-  keep MCP2515 listen-only, force the Mid Carrier J4/U2 built-in CAN lane into
-  silent monitor RX, disable USB reconnect reset, and advertise
+  start both CAN lanes in pre-session safe receive, enter ACK-observe only after
+  a stable host session, disable USB reconnect reset, and advertise
   `vehicle_impact_state=configured_passive` unless hardware and bench safety
   evidence IDs allow `verified_passive`.
 - Passive Product must not stage CAN payload while host CDC/DTR is absent.
   Session open must discard stale uplink/session payload, bump session epochs,
   report host-absent summary, and then emit only new capture-session CAN frames.
 - USB attach quarantine is not a CAN front-end stop. It only cleans
-  CDC/uplink/session state while CAN RX passive drain continues.
+  CDC/uplink/session state before ACK-observe is enabled.
 - Capability hardware evidence fields are claims/references. They must not be
   used as physical proof without matching external analyzer/scope/DTC artifacts.
 - The current product is two-bus only. Keep missing/one-bus mismatch evidence;
   do not reinterpret it as an accepted one-bus passive SKU.
-- Passive Product is not an ACK provider. Single-node Kvaser/PCAN transmit tests
-  must use a separate active ACK node or an explicit lab ACK/TX profile.
+- Passive Product is ACK-capable observe-only after a stable host session.
+  Single-node Kvaser/PCAN transmit tests are valid only after ACK-observe is
+  enabled. ACK capability is not host TX/control capability.
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect

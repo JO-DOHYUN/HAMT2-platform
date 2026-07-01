@@ -3,14 +3,16 @@
 ## CSM Regression - passive_product
 - default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`
 - passive guard reports zero linked active symbols for host downlink/control
-  TX/CAN TX tests/MCP normal mode/USB forced reset
+  TX/CAN TX tests/USB forced reset. MCP normal mode is allowed only through the
+  ACK-observe session state machine.
 - `CAPABILITY fw_profile=1`, `host_cmd_rx=0`, `control_path=0`,
   `dtr_reset_sensitive=0`, `dtr_session_required=1`,
   `dtr_session_only=1`, `passive_acceptance=0` unless hardware evidence IDs are
   explicitly configured
-- MCP2515 starts listen-only and bus0 advertises no ACK/error-frame capability
-- Mid Carrier J4/U2 bus1 starts in mbed CAN silent monitor mode and advertises
-  no ACK/error-frame capability
+- MCP2515 starts pre-session safe, advertises ACK-observe capability, and enters
+  normal observe only after session quarantine
+- Mid Carrier J4/U2 bus1 starts monitor/safe, advertises ACK-observe capability,
+  and enters observe only after session quarantine
 - `BOARD_HEALTH v6 passive_violation=0`, `serial_clear=0`,
   `serial_enqueue_fail=0`, `uplink_pool_alloc_fail=0` during smoke after the
   USB CDC host session opens

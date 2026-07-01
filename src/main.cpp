@@ -384,6 +384,14 @@
 #define BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX BOARD_ENABLE_BUILTIN_CAN_RX
 #endif
 
+#ifndef BOARD_PRODUCT_ACK_OBSERVE_MODE
+#define BOARD_PRODUCT_ACK_OBSERVE_MODE BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#endif
+
+#ifndef BOARD_PRODUCT_PRE_SESSION_SAFE_RECEIVE
+#define BOARD_PRODUCT_PRE_SESSION_SAFE_RECEIVE BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#endif
+
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
 #if BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515
 #error "Passive Product must compile out host CAN TX paths"
@@ -397,8 +405,8 @@
 #if BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
 #error "Passive Product must compile out CAN TX test paths"
 #endif
-#if !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
-#error "Passive Product MCP2515 must default to listen-only"
+#if !BOARD_PRODUCT_ACK_OBSERVE_MODE
+#error "Passive Product must be ACK-capable observe-only after stable host session"
 #endif
 #if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
 #error "Passive Product must disable USB CDC reconnect reset"
@@ -704,6 +712,7 @@ static uint32_t can_init_retry_count = 0;
 #if BOARD_ENABLE_MCP2515
 static bool mcp2515_listen_only_mode = false;
 #endif
+static bool ack_observe_enabled = false;
 static bool usb_host_was_connected = false;
 static bool uplink_session_was_open = false;
 static uint32_t usb_disconnected_since_ms = 0;
@@ -757,6 +766,7 @@ static uint8_t firmware_profile_id() {
 }
 
 static void discard_can_queue_for_session_quarantine();
+static void set_can_observe_mode_for_session(bool enabled, bool force = false);
 
 static uint8_t vehicle_impact_state() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -764,7 +774,6 @@ static uint8_t vehicle_impact_state() {
           BOARD_PASSIVE_HARDWARE_SILENT_STRAPPED &&
           BOARD_PASSIVE_POWER_OFF_PASSIVE &&
           BOARD_PASSIVE_TXD_GATED &&
-          !BOARD_PASSIVE_NORMAL_ENABLE_PATH_POPULATED &&
           BOARD_PASSIVE_HARDWARE_SAFETY_CASE_ID != 0 &&
           BOARD_PASSIVE_BENCH_VERIFICATION_ID != 0 &&
           BOARD_PASSIVE_EXTERNAL_ANALYZER_ARTIFACT_ID != 0 &&
@@ -1224,9 +1233,11 @@ static void emit_capability() {
       mcp_control_runtime_allowed,
       BOARD_MCP2515_CAPABILITY_TERMINATION_POLICY,
       BOARD_MCP2515_CAPABILITY_ISOLATION_POLICY);
-  config.bus_mode[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? kBusModeListenOnly : kBusModeNormal;
-  config.bus_ack_capability[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1;
-  config.bus_error_frame_capability[0] = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1;
+  config.bus_mode[0] = BOARD_PRODUCT_ACK_OBSERVE_MODE ? kBusModeNormal :
+      (BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? kBusModeListenOnly : kBusModeNormal);
+  config.bus_ack_capability[0] = BOARD_PRODUCT_ACK_OBSERVE_MODE ? 1 :
+      (BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1);
+  config.bus_error_frame_capability[0] = config.bus_ack_capability[0];
   config.bus_transceiver_reset_safe[0] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
@@ -1240,11 +1251,9 @@ static void emit_capability() {
       0,
       0);
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
-  // Passive 2-bus product uses mbed CAN silent monitor mode on the Mid Carrier
-  // J4/U2 lane. Advertising normal/ACK-capable here would hide vehicle-impact risk.
-  config.bus_mode[1] = kBusModeListenOnly;
-  config.bus_ack_capability[1] = 0;
-  config.bus_error_frame_capability[1] = 0;
+  config.bus_mode[1] = BOARD_PRODUCT_ACK_OBSERVE_MODE ? kBusModeNormal : kBusModeListenOnly;
+  config.bus_ack_capability[1] = BOARD_PRODUCT_ACK_OBSERVE_MODE ? 1 : 0;
+  config.bus_error_frame_capability[1] = config.bus_ack_capability[1];
 #else
   config.bus_mode[1] = kBusModeNormal;
   config.bus_ack_capability[1] = 1;
@@ -1812,6 +1821,7 @@ static void service_uplink_session_state() {
   const bool open = uplink_host_session_open();
   if (!open) {
     if (uplink_session_was_open) {
+      set_can_observe_mode_for_session(false);
       uplink_session_was_open = false;
       usb_cdc_session_close_total++;
       usb_cdc_last_session_duration_ms = static_cast<uint32_t>(now_ms - usb_cdc_session_open_ms);
@@ -1833,6 +1843,7 @@ static void service_uplink_session_state() {
   close_host_absent_interval(now_ms);
   discard_session_uplink_payloads();
   can_rx_segment_builder.resetForEpoch(0);
+  set_can_observe_mode_for_session(true);
 
   emit_capability();
   last_capability_ms = now_ms;
@@ -1980,7 +1991,12 @@ static void update_safety_state() {
   const SafetyState before = safety_supervisor.state();
   safety_supervisor.update(millis(), inputs);
   safety_state = safety_supervisor.state();
-  const bool rx_transceiver_enable = BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0;
+  const bool rx_transceiver_enable =
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+      (BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0) && ack_observe_enabled;
+#else
+      BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0;
+#endif
   digitalWrite(BoardPins::CanTxEnable,
                (rx_transceiver_enable ||
                 safety_supervisor.canDriveTxGate() ||
@@ -2184,9 +2200,18 @@ static void __attribute__((unused)) service_mcp2515_passive_readback_guard(bool 
     return;
   }
 
-  const bool listen_only = (canctrl & 0xE0u) == 0x60u;
+  const uint8_t mode_bits = canctrl & 0xE0u;
+  const bool listen_only = mode_bits == 0x60u;
+  const bool normal_mode = mode_bits == 0x00u;
+  const bool expected_listen_only =
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+      !ack_observe_enabled;
+#else
+      BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT != 0;
+#endif
+  const bool mode_ok = expected_listen_only ? listen_only : normal_mode;
   const uint16_t detail = (static_cast<uint16_t>(canctrl) << 8) | txreq;
-  if (!listen_only) {
+  if (!mode_ok) {
     passive_readback_violation_total++;
     latch_passive_violation(kPassiveViolationMcpReadbackMode);
     emit_board_event(EventMcpPassiveModeViolation, detail, passive_readback_violation_total);
@@ -2323,13 +2348,13 @@ static bool init_can_backend() {
     return false;
   }
   err =
-#if BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT || BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
       mcp2515->setListenOnlyMode();
 #else
       (latch_passive_violation(kPassiveViolationMcpNormalMode), mcp2515->setNormalMode());
 #endif
 #if BOARD_MCP2515_TX_USE_ONESHOT
-  if (err == MCP2515::ERROR_OK && !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) {
+  if (err == MCP2515::ERROR_OK && !BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT && !BOARD_CSM_PROFILE_PASSIVE_PRODUCT) {
     mcp2515_raw_modify_register(kMcpRegCanctrl, kMcpCanctrlOsm, kMcpCanctrlOsm);
   }
 #endif
@@ -2338,7 +2363,7 @@ static bool init_can_backend() {
     emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err), 2);
     return false;
   }
-  mcp2515_listen_only_mode = BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT != 0;
+  mcp2515_listen_only_mode = (BOARD_CSM_PROFILE_PASSIVE_PRODUCT || BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) != 0;
 #if BOARD_CAN_IRQ_MODE == 2
   if (!mcp_service.exti_attached) {
     attachInterrupt(digitalPinToInterrupt(BoardPins::CanIntN), on_mcp2515_int, FALLING);
@@ -2445,6 +2470,53 @@ static bool __attribute__((unused)) init_builtin_can_lane() {
   return true;
 #else
   return false;
+#endif
+}
+
+static void set_can_observe_mode_for_session(bool enabled, bool force) {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  const bool target_ack_observe = enabled && (BOARD_PRODUCT_ACK_OBSERVE_MODE != 0);
+  if (!force && ack_observe_enabled == target_ack_observe) {
+    return;
+  }
+
+#if BOARD_ENABLE_SAFETY_IO
+  if (!target_ack_observe) {
+    digitalWrite(BoardPins::CanTxEnable, LOW);
+  }
+#endif
+
+#if BOARD_ENABLE_MCP2515
+  if (mcp2515 != nullptr) {
+    const MCP2515::ERROR err = target_ack_observe ? mcp2515->setNormalMode()
+                                                  : mcp2515->setListenOnlyMode();
+    if (err == MCP2515::ERROR_OK) {
+      mcp2515_listen_only_mode = !target_ack_observe;
+    } else {
+      emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err),
+                       target_ack_observe ? 4 : 5);
+    }
+  }
+#endif
+
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  if (builtin_can_tx_ok) {
+    builtin_can.monitor(!target_ack_observe);
+  }
+#endif
+
+  ack_observe_enabled = target_ack_observe;
+
+#if BOARD_ENABLE_SAFETY_IO
+  digitalWrite(BoardPins::CanTxEnable,
+               (ack_observe_enabled && (BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0)) ? HIGH : LOW);
+#endif
+  emit_board_event(EventTransceiverSafeStateChanged,
+                   ack_observe_enabled ? 1u : 0u,
+                   usb_attach_quarantine_total);
+  service_mcp2515_passive_readback_guard(true);
+#else
+  (void)enabled;
 #endif
 }
 
@@ -3212,13 +3284,10 @@ static void service_encoder() {
 
 void setup() {
   uplink_boot_ms = millis();
-  Serial.begin(115200);
+  init_safety_pins();
   init_status_led();
   init_runtime_watchdog();
-  const uint32_t start_ms = millis();
-  while (!Serial && (millis() - start_ms) < 1500) {
-    kick_runtime_watchdog();
-  }
+  Serial.begin(115200);
 
   csm::board::uplink::SerialTxSchedulerConfig serial_tx_config;
   serial_tx_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
@@ -3228,7 +3297,6 @@ void setup() {
   uplink_scheduler.begin(&serial_tx_scheduler);
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
 
-  init_safety_pins();
   safety_supervisor.begin(millis());
   safety_state = safety_supervisor.state();
   voltage_adc_ok = init_voltage_adc_lane();
@@ -3324,6 +3392,9 @@ void loop() {
       emit_board_event(EventCanBeginFailed, 1, can_init_retry_count);
     } else {
       reset_can_init_retry_backoff();
+      if (uplink_host_session_open()) {
+        set_can_observe_mode_for_session(true, true);
+      }
       emit_capability();
       last_capability_ms = millis();
     }

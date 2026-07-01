@@ -3,15 +3,15 @@
 ## Product Identity
 
 CSM is not a USB-CAN bridge in the product path. CSM Passive Product is a
-two-bus RX-only passive CAN front-end that emits typed evidence over CDC when a
-host session is present. Active TX/control belongs only to explicit bench/lab
-profiles.
+two-bus ACK-capable observe-only CAN front-end that emits typed evidence over
+CDC when a host session is present. Host-originated TX/control belongs only to
+explicit bench/lab profiles.
 
 ## Product Modes
 
 | Mode | Purpose | Vehicle passive acceptance | CAN TX/ACK |
 | --- | --- | --- | --- |
-| Passive Product | two-bus field monitor/logger evidence | allowed only after hardware evidence | disabled / no ACK |
+| Passive Product | two-bus field monitor/logger evidence | allowed only after hardware evidence | ACK-observe, no host TX/control |
 | Full Instrumented | bench/HIL control and diagnostics | forbidden | allowed by build flags |
 | Bench ACK/TX Test | Kvaser/PCAN single-node TX counterpart | forbidden | ACK/TX allowed by explicit lab profile |
 
@@ -20,25 +20,27 @@ profiles.
 ```text
 Power/reset
   -> hardware-default safe pins
-  -> CAN front-end passive init
-  -> host absent drain-and-discard
+  -> CAN front-end pre-session safe receive
+  -> host absent safe-receive-and-discard
   -> CDC session open
   -> uplink/session quarantine cleanup
+  -> ACK-observe enable
   -> capability + lifecycle summaries
   -> new CAN_RX_SEGMENT evidence only
 ```
 
-The CAN front-end drain must continue regardless of CDC host state. USB
-open/close may clean only CDC/uplink/session payload state. It must not switch
-MCP mode, reset transceiver/controller, enable TX gates, or replay old payloads.
+USB open/close may clean only CDC/uplink/session payload state. It must not
+enable host TX/control, reset the front-end, or replay old payloads. A controlled
+state-machine transition from pre-session safe receive to ACK-observe is allowed
+only after session quarantine.
 
 ## Module Ownership Target
 
 - `protocol/TypedFrame`: SOF, header, seq, length, CRC, endian helpers.
 - `protocol/TypedRecords`: shared record IDs and payload layout.
 - `CapabilityPublisher`: firmware profile, bus descriptors, passive claims.
-- `CanRxLane_MCP2515`: bus0 MCP2515 listen-only RX and passive readback.
-- `CanRxLane_BuiltinSilent`: bus1 Mid Carrier J4/U2 silent monitor RX.
+- `CanRxLane_MCP2515`: bus0 MCP2515 pre-session safe receive and ACK-observe.
+- `CanRxLane_Builtin`: bus1 Mid Carrier J4/U2 pre-session monitor and ACK-observe.
 - `HostSessionRuntime`: CDC session epoch, DTR/session events, quarantine.
 - `UplinkScheduler`: priority/descriptor/payload ownership, no silent clear.
 - `HealthMonitor`: counters, violation latch, board health payload.
@@ -53,15 +55,15 @@ behavior must be expressed through these ownership boundaries.
 
 - Passive Product compiles out host downlink, host TX, control TX, periodic test
   TX, and USB reconnect reset.
-- bus0 MCP2515 starts and remains listen-only.
-- bus1 built-in CAN starts and remains silent monitor RX.
+- bus0 MCP2515 starts pre-session safe and enters ACK-observe only after stable session.
+- bus1 built-in CAN starts monitor/safe and enters ACK-observe only after stable session.
 - TXREQ bits must remain zero; violation latches and reports.
 - Hardware evidence fields in CAPABILITY are claims/references, not proof.
 - `passive_acceptance_allowed=true` requires nonzero hardware safety,
   bench verification, external analyzer artifact, and hotplug count.
 - One-bus product artifacts are invalid; missing-bus mismatch diagnostics remain.
-- Passive Product does not ACK. Kvaser/PCAN TX tests require another active node
-  or a lab ACK/TX profile.
+- Passive Product may ACK after session stability. Kvaser/PCAN TX tests require
+  ACK-observe enabled; ACK remains separate from host TX/control.
 
 ## Wire Contract
 

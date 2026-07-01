@@ -84,7 +84,6 @@ if is_passive:
         "BOARD_ENABLE_CAN_TX_GATE_FOR_TEST",
         "BOARD_MCP2515_CONTROL_TX_ALLOWED",
         "BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED",
-        "BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX",
         "BOARD_USB_CDC_RECONNECT_RESET_MS",
     ]
     required_true = [
@@ -92,6 +91,9 @@ if is_passive:
         ("BOARD_ENABLE_MCP2515", "1"),
         ("BOARD_ENABLE_BUILTIN_CAN_RX", "0"),
         ("BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT", "0"),
+        ("BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX", "0"),
+        ("BOARD_PRODUCT_ACK_OBSERVE_MODE", "0"),
+        ("BOARD_PRODUCT_PRE_SESSION_SAFE_RECEIVE", "0"),
         ("BOARD_USB_CDC_DTR_SESSION_REQUIRED", "1"),
         ("BOARD_USB_CDC_DTR_SESSION_ONLY", "1"),
     ]
@@ -137,7 +139,6 @@ if is_passive:
             "service_mcp2515_tx_test",
             "service_builtin_can_tx_test",
             "NVIC_SystemReset",
-            "MCP2515::setNormalMode",
             "CAN::write",
         ]
         hits = [symbol for symbol in forbidden if symbol in output]

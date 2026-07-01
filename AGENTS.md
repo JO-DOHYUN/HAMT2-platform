@@ -2,7 +2,7 @@
 
 ## Purpose
 This root file is a routing guide for agents working in the standalone CSM
-firmware repository. The product identity is a two-bus RX-only passive CAN
+firmware repository. The product identity is a two-bus ACK-capable observe-only CAN
 front-end with typed evidence uplink. VSM/Qt and Android app work must live in
 their own repositories, not inside this project folder.
 
@@ -27,24 +27,29 @@ their own repositories, not inside this project folder.
 - `CONTROL_ACK` is board request evidence. Actual CAN TX success is proven only
   by `CAN_TX_RAW`.
 - CSM has explicit artifacts:
-  - Passive Product: two-bus RX-only vehicle evidence capture.
+  - Passive Product: two-bus ACK-capable observe-only vehicle evidence capture.
   - Full Instrumented: bench/HIL control work.
   - Bench ACK/TX test: lab-only counterpart for Kvaser/PCAN transmit tests.
   Do not use Full Instrumented or Bench ACK/TX as passive acceptance evidence.
-- Passive Product is always a two-bus RX artifact for the current vehicle use
-  case. It must compile out host downlink, control, CAN TX, test TX, USB
-  reconnect reset, and MCP normal-mode transitions. It is not `verified_passive`
-  until hardware safety case and bench verification IDs are nonzero.
+- Passive Product is always a two-bus observe-only artifact for the current
+  vehicle use case. It must compile out host downlink, control, CAN TX, test TX,
+  and USB reconnect reset. Controlled MCP/built-in CAN mode transitions are
+  allowed only to move between pre-session safe receive and session-stable
+  ACK-observe. It is not `verified_passive` until hardware safety case and bench
+  verification IDs are nonzero.
 - Hardware evidence fields in `CAPABILITY` are claims and artifact references.
   They are not proof by themselves; vehicle-impact-free PASS requires external
   analyzer/scope/DTC evidence.
-- CDC session open/close/DTR/re-enumeration must not change MCP mode, transceiver
-  mode, TX gate, or reset policy. Host absent service drains CAN front-end RX and
-  records discard summary counters; it must not stage typed frame payloads.
-- USB attach quarantine is CDC/uplink/session payload cleanup only. CAN
-  front-end passive drain must continue during quarantine.
-- Passive Product does not ACK. Kvaser/PCAN single-node transmit failures are
-  expected unless another active ACK-capable node or lab ACK profile is present.
+- CDC session open/close/DTR/re-enumeration must not enable host
+  downlink/TX/control or reset the CAN front-end. Host absent service keeps
+  pre-session safe receive and records discard summary counters; it must not
+  stage typed frame payloads.
+- USB attach quarantine is CDC/uplink/session payload cleanup only. After
+  quarantine the firmware may enter ACK-capable observe mode, and session close
+  must return to pre-session safe receive.
+- Passive Product is ACK-capable observe-only after a stable host session.
+  ACK capability is not host TX/control capability. Pre-session no-ACK is a safe
+  lifecycle state, not a product transmit failure.
 - One-bus passive products are forbidden, but missing-bus or one-bus capability
   mismatch diagnostics must remain visible to VSM.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source
@@ -54,7 +59,8 @@ their own repositories, not inside this project folder.
   from this repository root with PlatformIO.
 - Bus labels are profile/capability-driven. The Passive Product default env is
   `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`, which exposes MCP2515/TJA1050
-  as listen-only `bus=0` and Mid Carrier J4/U2 as silent-monitor RX `bus=1`.
+  as `bus=0` and Mid Carrier J4/U2 as `bus=1`; both are observe-only,
+  ACK-capable after session stability, and host TX/control disabled.
   The Full Instrumented env keeps both buses available for bench/HIL RX and
   audited control TX. One-bus passive builds are not product artifacts.
 
