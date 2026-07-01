@@ -1,59 +1,73 @@
-# CSM_ARCHITECTURE_KO
+# CSM Architecture
 
-## 목표 구조
-CSM firmware는 setup/loop orchestration과 lane/module 책임을 분리한다.
+## Product Identity
 
-Target modules:
-- `protocol/TypedFrame`: SOF, header, seq, length, CRC, endian helper
-- `protocol/TypedRecords`: shared record id and payload helper
-- `HostDownlinkParser`: USB downlink frame parser
-- `ControlLane`: request validation, allowlist, TX queue, `CONTROL_ACK`
-- `CanTxAuditLane`: actual successful write -> `CAN_TX_RAW`
-- `CanLane_MCP2515`: current Mid Carrier MCP RX/TX -> `CAN_RX_RAW bus=0` and
-  `CAN_TX_RAW bus=0`
-- `CanRxLane_PortentaCan`: internal Classic CAN 2.0 lanes -> `CAN_RX_RAW bus=N`
-- `AnalogSampleLane`: raw ADC -> `ADC_SAMPLE`
-- `SafetySupervisor`: arm/lease/timeout/estop/neutral policy
-- `HealthMonitor`: counters, queue depth, fault/event state
-- `CapabilityPublisher`: lane and protocol capability evidence
+CSM is not a USB-CAN bridge in the product path. CSM Passive Product is a
+two-bus RX-only passive CAN front-end that emits typed evidence over CDC when a
+host session is present. Active TX/control belongs only to explicit bench/lab
+profiles.
 
-## Current Migration Rule
-Do behavior-preserving splits first for the legacy bench profile. The legacy
-split must not change:
-- record ids
-- payload sizes
-- endian layout
-- MCP `bus=0`
-- built-in CAN `bus=1`
-- accepted host TX ids `0x503`, `0x510..0x513`
+## Product Modes
 
-For the current Mid Carrier MCP2515 CSM target:
-- `bus=0` means external MCP2515/TJA1050 over the Mid Carrier D7..D11 SPI pins.
-- `bus=0` owns typed RX and allowlisted host-command TX audit.
-- final dual CSM env `portenta_h7_m7_mid_mcp2515_j4_dual_csm` also exposes
-  Mid Carrier J4 CAN1 through onboard U2 as `bus=1`; it owns typed RX and
-  allowlisted host-command TX audit for the second physical CAN analyzer/bus.
-- The internal CAN0/CAN1 + TJA1051 path is deferred.
-- Qt/VMS must use `CAPABILITY` for labels, backend type, role, bitrate, and
-  control permission.
+| Mode | Purpose | Vehicle passive acceptance | CAN TX/ACK |
+| --- | --- | --- | --- |
+| Passive Product | two-bus field monitor/logger evidence | allowed only after hardware evidence | disabled / no ACK |
+| Full Instrumented | bench/HIL control and diagnostics | forbidden | allowed by build flags |
+| Bench ACK/TX Test | Kvaser/PCAN single-node TX counterpart | forbidden | ACK/TX allowed by explicit lab profile |
 
-## MCP2515 Rule
-`INT_N` is active-low level information. It may be used as a hint with bounded
-polling fallback, but the RX authority is MCP status/register drain.
+## Passive Product Data Flow
 
-## Production Cleanup
-The built-in CAN and MCP example transmitters are bench features. Production
-control builds must keep them behind build flags and rely on host requested
-frames plus `CAN_TX_RAW` audit. The final runtime env disables periodic smoke
-TX; the separate `portenta_h7_m7_mid_mcp2515_j4_dual_smoke` env is reserved for
-hardware validation.
+```text
+Power/reset
+  -> hardware-default safe pins
+  -> CAN front-end passive init
+  -> host absent drain-and-discard
+  -> CDC session open
+  -> uplink/session quarantine cleanup
+  -> capability + lifecycle summaries
+  -> new CAN_RX_SEGMENT evidence only
+```
 
-## VMS Freeze Boundary
-Before VMS work, the CSM contract is frozen at typed transport v1:
-- live stream records are `CAN_RX_RAW`, `CAN_TX_RAW`, `CONTROL_ACK`,
-  `BOARD_EVENT`, `BOARD_HEALTH`, and `CAPABILITY` with the payload sizes in
-  `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
-- bus meaning is descriptor-driven, not bus-number-driven
-- Classic CAN 2.0 only, live DLC `0..8`; CAN FD is out of scope
-- host control IDs are `0x503` and `0x510..0x513`
-- `CONTROL_ACK` is not final TX evidence; VMS waits for matching `CAN_TX_RAW`
+The CAN front-end drain must continue regardless of CDC host state. USB
+open/close may clean only CDC/uplink/session payload state. It must not switch
+MCP mode, reset transceiver/controller, enable TX gates, or replay old payloads.
+
+## Module Ownership Target
+
+- `protocol/TypedFrame`: SOF, header, seq, length, CRC, endian helpers.
+- `protocol/TypedRecords`: shared record IDs and payload layout.
+- `CapabilityPublisher`: firmware profile, bus descriptors, passive claims.
+- `CanRxLane_MCP2515`: bus0 MCP2515 listen-only RX and passive readback.
+- `CanRxLane_BuiltinSilent`: bus1 Mid Carrier J4/U2 silent monitor RX.
+- `HostSessionRuntime`: CDC session epoch, DTR/session events, quarantine.
+- `UplinkScheduler`: priority/descriptor/payload ownership, no silent clear.
+- `HealthMonitor`: counters, violation latch, board health payload.
+- `PassiveSupervisor`: mode readback, TXREQ zero verification, reset/power
+  suspected latch.
+- `ControlLane` / `CanTxAuditLane`: bench/full profile only.
+
+`src/main.cpp` remains orchestration until the migration is finished, but new
+behavior must be expressed through these ownership boundaries.
+
+## Passive Invariants
+
+- Passive Product compiles out host downlink, host TX, control TX, periodic test
+  TX, and USB reconnect reset.
+- bus0 MCP2515 starts and remains listen-only.
+- bus1 built-in CAN starts and remains silent monitor RX.
+- TXREQ bits must remain zero; violation latches and reports.
+- Hardware evidence fields in CAPABILITY are claims/references, not proof.
+- `passive_acceptance_allowed=true` requires nonzero hardware safety,
+  bench verification, external analyzer artifact, and hotplug count.
+- One-bus product artifacts are invalid; missing-bus mismatch diagnostics remain.
+- Passive Product does not ACK. Kvaser/PCAN TX tests require another active node
+  or a lab ACK/TX profile.
+
+## Wire Contract
+
+Typed transport v1 is the production live output. Legacy/diagnostic binaries are
+not field product paths. Any wire-format change must update:
+
+- `include/protocol/TypedRecords.h`
+- `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
+- matching VSM typed parser and capability decoder

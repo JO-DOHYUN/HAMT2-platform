@@ -74,20 +74,25 @@ is_passive = env_name.endswith("_passive") or _truthy(
 
 if is_passive:
     required_false = [
+        "BOARD_CSM_PROFILE_FULL_INSTRUMENTED",
         "BOARD_ENABLE_HOST_CAN_TX",
         "BOARD_ENABLE_HOST_CAN_TX_BUILTIN",
         "BOARD_ENABLE_HOST_CAN_TX_MCP2515",
         "BOARD_ENABLE_HOST_DOWNLINK",
         "BOARD_ENABLE_BUILTIN_CAN_TX_TEST",
         "BOARD_ENABLE_MCP2515_TX_TEST",
+        "BOARD_ENABLE_CAN_TX_GATE_FOR_TEST",
         "BOARD_MCP2515_CONTROL_TX_ALLOWED",
         "BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED",
+        "BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX",
+        "BOARD_USB_CDC_RECONNECT_RESET_MS",
     ]
     required_true = [
         ("BOARD_CSM_PROFILE_PASSIVE_PRODUCT", "0"),
         ("BOARD_ENABLE_MCP2515", "1"),
         ("BOARD_ENABLE_BUILTIN_CAN_RX", "0"),
         ("BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT", "0"),
+        ("BOARD_USB_CDC_DTR_SESSION_REQUIRED", "1"),
         ("BOARD_USB_CDC_DTR_SESSION_ONLY", "1"),
     ]
     config_errors = []

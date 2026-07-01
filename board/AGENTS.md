@@ -56,6 +56,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   used as physical proof without matching external analyzer/scope/DTC artifacts.
 - The current product is two-bus only. Keep missing/one-bus mismatch evidence;
   do not reinterpret it as an accepted one-bus passive SKU.
+- Passive Product is not an ACK provider. Single-node Kvaser/PCAN transmit tests
+  must use a separate active ACK node or an explicit lab ACK/TX profile.
 - the dual internal CAN0/CAN1 + TJA1051 direction is deferred; hosts must learn
   labels from `CAPABILITY` instead of hard-coding board assumptions
 - overflow or drop without an event/counter is a defect
@@ -68,6 +70,8 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - board is not a simple bridge anymore
 - default product artifact is a vehicle-impact-free passive evidence device;
   active control belongs only to Full Instrumented bench/HIL artifacts
+- lab ACK/TX profiles may exist for bench tooling, but they are never vehicle
+  passive acceptance artifacts
 - target shape:
   - `CanRxLane`
   - `EncoderEdgeLane`

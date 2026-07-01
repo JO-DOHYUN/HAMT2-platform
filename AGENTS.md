@@ -2,8 +2,9 @@
 
 ## Purpose
 This root file is a routing guide for agents working in the standalone CSM
-firmware repository. VSM/Qt and Android app work must live in their own
-repositories, not inside this project folder.
+firmware repository. The product identity is a two-bus RX-only passive CAN
+front-end with typed evidence uplink. VSM/Qt and Android app work must live in
+their own repositories, not inside this project folder.
 
 ## Read Order
 1. Read `BRIEF.md` for the current repository-level state.
@@ -25,9 +26,11 @@ repositories, not inside this project folder.
   replay/import compatibility, not a live output mode.
 - `CONTROL_ACK` is board request evidence. Actual CAN TX success is proven only
   by `CAN_TX_RAW`.
-- CSM has two explicit artifacts: Passive Product for vehicle-impact-free
-  evidence capture, and Full Instrumented for bench/HIL control work. Do not use
-  Full Instrumented as passive acceptance evidence.
+- CSM has explicit artifacts:
+  - Passive Product: two-bus RX-only vehicle evidence capture.
+  - Full Instrumented: bench/HIL control work.
+  - Bench ACK/TX test: lab-only counterpart for Kvaser/PCAN transmit tests.
+  Do not use Full Instrumented or Bench ACK/TX as passive acceptance evidence.
 - Passive Product is always a two-bus RX artifact for the current vehicle use
   case. It must compile out host downlink, control, CAN TX, test TX, USB
   reconnect reset, and MCP normal-mode transitions. It is not `verified_passive`
@@ -40,6 +43,8 @@ repositories, not inside this project folder.
   records discard summary counters; it must not stage typed frame payloads.
 - USB attach quarantine is CDC/uplink/session payload cleanup only. CAN
   front-end passive drain must continue during quarantine.
+- Passive Product does not ACK. Kvaser/PCAN single-node transmit failures are
+  expected unless another active ACK-capable node or lab ACK profile is present.
 - One-bus passive products are forbidden, but missing-bus or one-bus capability
   mismatch diagnostics must remain visible to VSM.
 - `shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the CSM/VMS wire-contract source

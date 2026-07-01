@@ -18,6 +18,8 @@ This is the standalone CSM board firmware repository.
   It must build the same two-bus passive behavior; any passive artifact with
   fewer than two RX buses is invalid for the current vehicle product.
 - Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
+- Kvaser/PCAN single-node transmit checks require a lab ACK/TX mode or another
+  active ACK-capable node. Passive Product does not ACK by design.
 - Current board identity before this cleanup was read on COM7 as:
   - `git=4d21a3c9431`
   - `dirty=1`
@@ -60,6 +62,9 @@ This is the standalone CSM board firmware repository.
 - USB attach quarantine is CDC/uplink/session cleanup only. It must never stop
   CAN front-end passive drain or reset/reconfigure CAN controller/transceiver
   state.
+- USB physical hotplug disturbance is not considered solved by CDC/uplink
+  quarantine alone. Firmware must expose lifecycle evidence, and final
+  vehicle-impact-free PASS requires external analyzer/scope/DTC proof.
 - `CAPABILITY v6` hardware fields are runtime claims/artifact references only.
   Final `verified_passive` requires external analyzer/scope/DTC evidence whose
   IDs match the claim fields.
