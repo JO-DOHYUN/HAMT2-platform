@@ -58,6 +58,21 @@ their own repositories, not inside this project folder.
   The Full Instrumented env keeps both buses available for bench/HIL RX and
   audited control TX. One-bus passive builds are not product artifacts.
 
+## Verification Budget
+- Do not build by habit. Select the smallest proof that covers the changed
+  surface.
+- Docs/harness/comments only: run `git diff --check` and targeted text search.
+  Do not run PlatformIO.
+- Firmware, `platformio.ini`, passive guard, shared protocol, or capability
+  changes: build only the affected env first.
+- Build the passive alias, full instrumented env, or lab ACK/TX env only when
+  profile separation, wire compatibility, or that specific artifact changed.
+- Upload is not build verification. Upload only when explicitly requested and
+  the current hardware/vehicle context is safe for MCU reset, USB
+  re-enumeration, and CAN-side disturbance.
+- VSM/CSM system work must inspect both repositories, but edit, build, upload,
+  commit, and push each repository from its own root.
+
 ## Change Rules
 - If record wire format changes, update `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
   in the same change.

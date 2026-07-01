@@ -96,6 +96,10 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
 - if queue or timestamp semantics change, update validation docs in the same turn
 
 ## Verify Before Claiming
+- build only when the changed board surface requires it; docs/harness-only work
+  uses `git diff --check` and targeted search instead of PlatformIO
+- upload only on explicit request and safe hardware context; upload is not a
+  normal verification shortcut
 - build or say build not verified
 - state which lane changed
 - state which risks remain

@@ -78,6 +78,10 @@ This is the standalone CSM board firmware repository.
 - HIL runbook: `board/docs/HIL_RUNBOOK_KO.md`
 
 ## Verification Commands
+Use these commands only when the changed surface requires them. For docs,
+harness, or comment-only changes, run `git diff --check` and targeted search
+instead of PlatformIO. Upload is a separate hardware action, not a build proof.
+
 Build Passive Product firmware:
 
 ```powershell
@@ -105,4 +109,7 @@ py -3 pc_tools\verify_typed_stream.py --port COM7 --seconds 4 --max-records 20
 ## Immediate Next Work
 - Use this repository root for all CSM PlatformIO build/upload work.
 - Keep VSM parser updates in the standalone VSM repository.
+- Build only the affected CSM env unless profile separation or wire
+  compatibility is part of the change.
+- Upload only on explicit request and safe hardware context.
 - Do not commit build outputs, captures, archives, or nested app workspaces.
