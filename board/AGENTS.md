@@ -43,10 +43,10 @@ Do not bulk-load the shared or board docs directories. Load detailed docs only w
   audited TX as `bus=0`, and Mid Carrier J4/U2 RX and audited TX as `bus=1`
   only in Full Instrumented bench/HIL builds
 - Passive Product must compile out host downlink/control/CAN TX/test paths,
-  start both CAN lanes in pre-session safe receive, enter ACK-observe only after
-  a stable host session, disable USB reconnect reset, and advertise
-  `vehicle_impact_state=configured_passive` unless hardware and bench safety
-  evidence IDs allow `verified_passive`.
+  defer both CAN lane initialization through USB power-up, enter ACK-observe
+  only after stable CDC/DTR session plus quiet window, disable USB reconnect
+  reset, and advertise `vehicle_impact_state=configured_passive` unless
+  hardware and bench safety evidence IDs allow `verified_passive`.
 - Passive Product must not stage CAN payload while host CDC/DTR is absent.
   Session open must discard stale uplink/session payload, bump session epochs,
   report host-absent summary, and then emit only new capture-session CAN frames.

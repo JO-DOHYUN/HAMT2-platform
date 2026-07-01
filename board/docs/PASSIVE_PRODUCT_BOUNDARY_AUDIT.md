@@ -7,9 +7,10 @@ Product CSM.
 
 ```text
 vehicle CAN bus0/bus1
-  -> pre-session safe receive
-  -> if host absent: discard payload and increment host-absent counters
-  -> if host session open: clear stale payload, enable ACK-observe, CAN_RX_SEGMENT evidence for new frames only
+  -> USB power-up with CAN front-end initialization held
+  -> if host absent: no typed payload staging
+  -> if host session open: clear stale payload, wait quiet window, initialize CAN front-end, enable ACK-observe
+  -> CAN_RX_SEGMENT evidence for new frames only
   -> CDC evidence uplink
 ```
 
@@ -25,8 +26,9 @@ and replayed when USB reconnects.
   emits `CAPABILITY`, emits USB session evidence, emits host-absent summary if
   present, then emits board health.
 - `USB_ATTACH_QUARANTINE` is CDC/uplink/session cleanup only. It must not replay
-  old payload, enable host TX/control, or reset the CAN front-end. It may only
-  transition from pre-session safe receive to ACK-observe after cleanup.
+  old payload or enable host TX/control. Passive field firmware also defers CAN
+  front-end initialization until the session quiet window has elapsed; it may
+  transition to ACK-observe only after that initialization succeeds.
 
 ## Passive Proof Boundary
 
@@ -55,4 +57,5 @@ are not hidden.
 
 Passive builds must fail if they link or enable host downlink, host CAN TX,
 control TX, test TX, or USB reconnect reset. Normal/ACK-capable mode is allowed
-only inside the session-stable ACK-observe state machine.
+only inside the session-stable ACK-observe state machine. Passive builds must
+also define `BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION=1`.

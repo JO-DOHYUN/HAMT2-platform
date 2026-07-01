@@ -392,6 +392,18 @@
 #define BOARD_PRODUCT_PRE_SESSION_SAFE_RECEIVE BOARD_CSM_PROFILE_PASSIVE_PRODUCT
 #endif
 
+#ifndef BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION
+#define BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+#endif
+
+#ifndef BOARD_PASSIVE_SESSION_CAN_FRONTEND_QUIET_MS
+#define BOARD_PASSIVE_SESSION_CAN_FRONTEND_QUIET_MS 750
+#endif
+
+#ifndef BOARD_PASSIVE_SESSION_CAN_FRONTEND_RETRY_MS
+#define BOARD_PASSIVE_SESSION_CAN_FRONTEND_RETRY_MS 250
+#endif
+
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
 #if BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515
 #error "Passive Product must compile out host CAN TX paths"
@@ -407,6 +419,9 @@
 #endif
 #if !BOARD_PRODUCT_ACK_OBSERVE_MODE
 #error "Passive Product must be ACK-capable observe-only after stable host session"
+#endif
+#if !BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION
+#error "Passive Product must defer CAN front-end init until CDC/DTR session is stable"
 #endif
 #if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
 #error "Passive Product must disable USB CDC reconnect reset"
@@ -533,6 +548,9 @@ enum BoardEventCode : uint16_t {
   EventMcpTxreqViolation = 33,
   EventTransceiverSafeStateChanged = 34,
   EventUsbPowerOrResetSuspected = 35,
+  EventCanFrontendPresessionHold = 36,
+  EventCanFrontendSessionReady = 37,
+  EventCanFrontendSessionInitFailed = 38,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -746,6 +764,13 @@ static uint32_t passive_readback_total = 0;
 static uint32_t passive_readback_violation_total = 0;
 static uint32_t txreq_violation_total = 0;
 static uint32_t last_passive_readback_ms = 0;
+static bool can_frontend_session_arm_pending = false;
+static bool can_frontend_session_ready = false;
+static uint32_t can_frontend_session_arm_after_ms = 0;
+static uint32_t can_frontend_presession_hold_total = 0;
+static uint32_t can_frontend_session_ready_total = 0;
+static uint32_t can_frontend_session_init_fail_total = 0;
+static uint32_t last_can_frontend_init_attempt_ms = 0;
 
 static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -767,6 +792,8 @@ static uint8_t firmware_profile_id() {
 
 static void discard_can_queue_for_session_quarantine();
 static void set_can_observe_mode_for_session(bool enabled, bool force = false);
+static bool init_can_backend();
+static bool __attribute__((unused)) init_builtin_can_lane();
 
 static uint8_t vehicle_impact_state() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -1791,6 +1818,93 @@ static void close_host_absent_interval(uint32_t now_ms) {
   host_absent_gap_total++;
 }
 
+static void begin_passive_can_frontend_session_quarantine(uint32_t now_ms) {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  can_frontend_session_ready = false;
+  can_frontend_session_arm_pending = true;
+  can_frontend_session_arm_after_ms = now_ms + BOARD_PASSIVE_SESSION_CAN_FRONTEND_QUIET_MS;
+  last_can_frontend_init_attempt_ms = 0;
+  can_frontend_presession_hold_total++;
+  set_can_observe_mode_for_session(false, true);
+  emit_board_event(EventCanFrontendPresessionHold,
+                   static_cast<uint16_t>(BOARD_PASSIVE_SESSION_CAN_FRONTEND_QUIET_MS),
+                   can_frontend_presession_hold_total);
+#else
+  (void)now_ms;
+#endif
+}
+
+static bool ensure_passive_can_frontend_session_ready(uint32_t now_ms) {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  if (!uplink_host_session_open()) {
+    return false;
+  }
+  if (can_frontend_session_ready) {
+    return true;
+  }
+  if (!can_frontend_session_arm_pending) {
+    begin_passive_can_frontend_session_quarantine(now_ms);
+  }
+  if (static_cast<int32_t>(now_ms - can_frontend_session_arm_after_ms) < 0) {
+    return false;
+  }
+  if (last_can_frontend_init_attempt_ms != 0 &&
+      now_ms - last_can_frontend_init_attempt_ms < BOARD_PASSIVE_SESSION_CAN_FRONTEND_RETRY_MS) {
+    return false;
+  }
+  last_can_frontend_init_attempt_ms = now_ms;
+
+  bool ready = true;
+#if BOARD_ENABLE_MCP2515_INIT
+  if (!can_backend_ok) {
+    can_backend_ok = init_can_backend();
+    if (!can_backend_ok) {
+      ready = false;
+      note_can_init_retry_failure();
+    } else {
+      reset_can_init_retry_backoff();
+    }
+  }
+#endif
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  if (!builtin_can_tx_ok) {
+    builtin_can_tx_ok = init_builtin_can_lane();
+    if (!builtin_can_tx_ok) {
+      ready = false;
+    }
+  }
+#endif
+
+  if (!ready) {
+    can_frontend_session_init_fail_total++;
+    emit_board_event(EventCanFrontendSessionInitFailed,
+                     static_cast<uint16_t>((can_backend_ok ? 0x0001u : 0u) |
+                                           (builtin_can_tx_ok ? 0x0002u : 0u)),
+                     can_frontend_session_init_fail_total);
+    return false;
+  }
+
+  set_can_observe_mode_for_session(true, true);
+  can_frontend_session_ready = true;
+  can_frontend_session_arm_pending = false;
+  can_frontend_session_ready_total++;
+  emit_board_event(EventCanFrontendSessionReady,
+                   static_cast<uint16_t>((can_backend_ok ? 0x0001u : 0u) |
+                                         (builtin_can_tx_ok ? 0x0002u : 0u) |
+                                         (ack_observe_enabled ? 0x0004u : 0u)),
+                   can_frontend_session_ready_total);
+  emit_capability();
+  last_capability_ms = now_ms;
+  const EncoderSnapshot snap = poll_encoder();
+  emit_board_health(snap);
+  last_health_ms = now_ms;
+  return true;
+#else
+  (void)now_ms;
+  return true;
+#endif
+}
+
 static void emit_host_absent_summary_if_needed() {
   if (!host_absent_summary_pending) {
     return;
@@ -1822,6 +1936,8 @@ static void service_uplink_session_state() {
   if (!open) {
     if (uplink_session_was_open) {
       set_can_observe_mode_for_session(false);
+      can_frontend_session_ready = false;
+      can_frontend_session_arm_pending = false;
       uplink_session_was_open = false;
       usb_cdc_session_close_total++;
       usb_cdc_last_session_duration_ms = static_cast<uint32_t>(now_ms - usb_cdc_session_open_ms);
@@ -1843,7 +1959,7 @@ static void service_uplink_session_state() {
   close_host_absent_interval(now_ms);
   discard_session_uplink_payloads();
   can_rx_segment_builder.resetForEpoch(0);
-  set_can_observe_mode_for_session(true);
+  begin_passive_can_frontend_session_quarantine(now_ms);
 
   emit_capability();
   last_capability_ms = now_ms;
@@ -3320,7 +3436,8 @@ void setup() {
   emit_board_event(EventCan0BackendUnavailable, 0, 1);
 #endif
 
-  if (!kTestMode && BOARD_ENABLE_MCP2515_INIT) {
+  if (!kTestMode && BOARD_ENABLE_MCP2515_INIT &&
+      (!BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION || uplink_host_session_open())) {
     can_backend_ok = init_can_backend();
     if (!can_backend_ok) {
       last_can_init_retry_ms = millis();
@@ -3332,7 +3449,11 @@ void setup() {
   }
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION
+  builtin_can_tx_ok = false;
+#else
   builtin_can_tx_ok = init_builtin_can_lane();
+#endif
 #endif
 
   emit_capability();
@@ -3349,10 +3470,20 @@ void loop() {
   mono64_us();
   service_uplink_session_state();
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
+    update_safety_state();
+    toggle_safety_watchdog_if_needed();
+    service_status_led();
+    service_capability_advertisement();
+    service_serial_tx(1024);
+    kick_runtime_watchdog();
+    return;
+  }
   if (!uplink_host_session_open()) {
     if (!kTestMode && can_backend_ok) {
       service_mcp2515_host_absent_drain(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
-    } else if (BOARD_ENABLE_MCP2515_INIT &&
+    } else if (!BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION &&
+               BOARD_ENABLE_MCP2515_INIT &&
                (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
       last_can_init_retry_ms = millis();
       can_backend_ok = init_can_backend();
@@ -3384,7 +3515,9 @@ void loop() {
     test_push_fake_can_if_needed();
   } else if (can_backend_ok) {
     pump_can_rx_to_queue(512);
-  } else if (BOARD_ENABLE_MCP2515_INIT && (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
+  } else if (!BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION &&
+             BOARD_ENABLE_MCP2515_INIT &&
+             (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
     last_can_init_retry_ms = millis();
     can_backend_ok = init_can_backend();
     if (!can_backend_ok) {

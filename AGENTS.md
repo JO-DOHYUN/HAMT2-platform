@@ -34,19 +34,21 @@ their own repositories, not inside this project folder.
 - Passive Product is always a two-bus observe-only artifact for the current
   vehicle use case. It must compile out host downlink, control, CAN TX, test TX,
   and USB reconnect reset. Controlled MCP/built-in CAN mode transitions are
-  allowed only to move between pre-session safe receive and session-stable
+  allowed only to move between deferred CAN front-end hold and session-stable
   ACK-observe. It is not `verified_passive` until hardware safety case and bench
   verification IDs are nonzero.
 - Hardware evidence fields in `CAPABILITY` are claims and artifact references.
   They are not proof by themselves; vehicle-impact-free PASS requires external
   analyzer/scope/DTC evidence.
 - CDC session open/close/DTR/re-enumeration must not enable host
-  downlink/TX/control or reset the CAN front-end. Host absent service keeps
-  pre-session safe receive and records discard summary counters; it must not
-  stage typed frame payloads.
+  downlink/TX/control. In the Passive Product field build, CAN front-end
+  initialization itself is deferred until CDC/DTR session stability plus the
+  configured quiet window; host absent service must not stage typed frame
+  payloads.
 - USB attach quarantine is CDC/uplink/session payload cleanup only. After
-  quarantine the firmware may enter ACK-capable observe mode, and session close
-  must return to pre-session safe receive.
+  quarantine and quiet-window deferred CAN initialization, the firmware may
+  enter ACK-capable observe mode. Session close must return to no-ACK
+  pre-session hold.
 - Passive Product is ACK-capable observe-only after a stable host session.
   ACK capability is not host TX/control capability. Pre-session no-ACK is a safe
   lifecycle state, not a product transmit failure.

@@ -265,14 +265,22 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `34` transceiver safe-state changed.
 - `35` USB power or reset suspected. This is product-blocking passive evidence
   until hardware investigation clears it.
+- `36` CAN front-end pre-session hold. Passive firmware has opened a host
+  session but is intentionally holding MCP/built-in CAN initialization until the
+  quiet window expires. `detail` is the quiet window in milliseconds.
+- `37` CAN front-end session ready. Deferred CAN front-end initialization
+  succeeded and ACK-observe was armed. `detail` bit0 means MCP ready, bit1 means
+  built-in CAN ready, bit2 means ACK-observe enabled.
+- `38` CAN front-end session init failed. Deferred CAN front-end initialization
+  failed and ACK-observe remains disabled. `detail` uses the same ready bitmask.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.
 - Before a USB CDC host session is open, the board must not stage typed uplink
-  records into the payload pool. Capability/health/session evidence is emitted
-  immediately when the session opens. CAN frames observed before the host
-  session are outside the VSM capture session and must not be counted as
-  `CAN_RX_SEGMENT` enqueue loss.
+  records into the payload pool. In passive field builds it must also defer
+  MCP/built-in CAN initialization until host session stability plus quiet time.
+  Capability/health/session evidence is emitted when the session opens; new
+  `CAN_RX_SEGMENT` evidence starts only after event `37`.
 - Production dual CSM requests CDC sends in 512-byte chunks, with each pump
   bounded by a maximum of two write attempts, 1024 requested bytes, and a
   firmware time budget.

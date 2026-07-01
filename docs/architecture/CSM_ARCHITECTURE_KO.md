@@ -20,26 +20,27 @@ explicit bench/lab profiles.
 ```text
 Power/reset
   -> hardware-default safe pins
-  -> CAN front-end pre-session safe receive
-  -> host absent safe-receive-and-discard
   -> CDC session open
   -> uplink/session quarantine cleanup
+  -> quiet window
+  -> CAN front-end initialization
   -> ACK-observe enable
   -> capability + lifecycle summaries
   -> new CAN_RX_SEGMENT evidence only
 ```
 
 USB open/close may clean only CDC/uplink/session payload state. It must not
-enable host TX/control, reset the front-end, or replay old payloads. A controlled
-state-machine transition from pre-session safe receive to ACK-observe is allowed
-only after session quarantine.
+enable host TX/control or replay old payloads. In the passive field build,
+MCP/built-in CAN initialization is held until CDC/DTR session stability plus
+quiet time. A controlled transition to ACK-observe is allowed only after that
+deferred initialization succeeds.
 
 ## Module Ownership Target
 
 - `protocol/TypedFrame`: SOF, header, seq, length, CRC, endian helpers.
 - `protocol/TypedRecords`: shared record IDs and payload layout.
 - `CapabilityPublisher`: firmware profile, bus descriptors, passive claims.
-- `CanRxLane_MCP2515`: bus0 MCP2515 pre-session safe receive and ACK-observe.
+- `CanRxLane_MCP2515`: bus0 MCP2515 deferred init and ACK-observe.
 - `CanRxLane_Builtin`: bus1 Mid Carrier J4/U2 pre-session monitor and ACK-observe.
 - `HostSessionRuntime`: CDC session epoch, DTR/session events, quarantine.
 - `UplinkScheduler`: priority/descriptor/payload ownership, no silent clear.
@@ -55,8 +56,10 @@ behavior must be expressed through these ownership boundaries.
 
 - Passive Product compiles out host downlink, host TX, control TX, periodic test
   TX, and USB reconnect reset.
-- bus0 MCP2515 starts pre-session safe and enters ACK-observe only after stable session.
-- bus1 built-in CAN starts monitor/safe and enters ACK-observe only after stable session.
+- bus0 MCP2515 is not initialized during USB power-up in passive field builds;
+  it is initialized and moved to ACK-observe only after stable session plus quiet
+  window.
+- bus1 built-in CAN follows the same deferred-init rule.
 - TXREQ bits must remain zero; violation latches and reports.
 - Hardware evidence fields in CAPABILITY are claims/references, not proof.
 - `passive_acceptance_allowed=true` requires nonzero hardware safety,

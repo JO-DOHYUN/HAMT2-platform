@@ -10,11 +10,11 @@
   MCP2515/TJA1050 SPI module and Mid Carrier J4/U2 built-in CAN RX. `bus=0`
   is MCP2515/TJA1050 at `MCP_8MHZ`, `CAN_500KBPS`, 8 MHz SPI, polling drain
   (`BOARD_CAN_IRQ_MODE=0`), `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`,
-  `CS/SCK/SI/SO/INT` level shifted, and pre-session safe receive before
-  ACK-observe. `bus=1` is J4/U2 built-in CAN at 500 kbps through mbed CAN
-  monitor/safe receive before ACK-observe. Host downlink, control TX, CAN TX
-  tests, and USB disconnect reset are compile-time forbidden for the passive
-  artifact.
+  `CS/SCK/SI/SO/INT` level shifted. In the passive field build, both bus0 and
+  bus1 CAN front ends are uninitialized during USB power-up, then initialized
+  only after stable CDC/DTR session plus quiet window before ACK-observe. Host
+  downlink, control TX, CAN TX tests, and USB disconnect reset are compile-time
+  forbidden for the passive artifact.
 - Full Instrumented keeps the active-capable dual CSM path for bench/HIL only:
   MCP2515/TJA1050 `bus=0` plus Mid Carrier J4/U2 `bus=1`, host control, safety
   gate, and audited `CAN_TX_RAW`.
@@ -93,9 +93,9 @@
 - drive encoder input is fixed as industrial HTL front-end plus Portenta `PC6`/`PC7` TIM3 encoder mode and `PA8` index input; direct 24 V HTL to GPIO is forbidden
 - carrier board owns field protection, isolation, power monitoring, CAN physical layer, external ADC front-end, and hard safety gate
 - Passive Product uses MCP2515 over SPI on `D7..D11` for `bus=0` and Mid Carrier
-  J4/U2 for `bus=1`; both lanes start in pre-session safe receive and enter
-  ACK-observe after a stable host session. It emits `CAN_RX_SEGMENT` for both
-  buses and does not accept host CAN TX requests.
+  J4/U2 for `bus=1`; both lanes are deferred through USB power-up and enter
+  ACK-observe only after stable host session plus quiet window. It emits
+  `CAN_RX_SEGMENT` for both buses and does not accept host CAN TX requests.
 - Passive Product host-absent mode is safe-receive-and-discard. It must not stage
   typed CAN payload for later replay, and session-open quarantine clears
   CDC/uplink/session state before enabling ACK-observe.
